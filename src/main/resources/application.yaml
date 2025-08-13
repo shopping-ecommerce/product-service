@@ -1,0 +1,33 @@
+server:
+  port: 8083
+  servlet:
+    context-path: /products
+
+spring:
+  application:
+    name: product-service
+
+  # 👉 Ưu tiên lấy từ ENV SPRING_DATA_MONGODB_URI; nếu không có thì dùng service-name "mongodb"
+  data:
+    mongodb:
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://root:root@mongodb:27017/product_db?authSource=admin}
+
+  # Upload multipart (cho /update kèm ảnh)
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  cloud:
+    openfeign:
+      client:
+        config:
+          # Timeout mặc định cho tất cả Feign client
+          default:
+            connect-timeout: 60000
+            read-timeout: 120000
+          # File-service (đọc từ ENV FEIGN_FILE, fallback sang service-name trong network)
+          file-service:
+            url: ${FEIGN_FILE:http://file-service:8084/file}
+            connect-timeout: 30000
+            read-timeout: 60000
