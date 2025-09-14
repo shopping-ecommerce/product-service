@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import iuh.fit.se.dto.request.ProductRequest;
 import iuh.fit.se.dto.request.ProductUpdateRequest;
+import iuh.fit.se.dto.request.SearchSizeAndIDRequest;
 import iuh.fit.se.dto.response.ApiResponse;
+import iuh.fit.se.dto.response.OrderItemProductResponse;
 import iuh.fit.se.dto.response.ProductResponse;
 import iuh.fit.se.service.ProductService;
 import jakarta.validation.Valid;
@@ -26,6 +28,36 @@ import java.util.List;
 public class ProductController {
     ProductService productService;
     ObjectMapper objectMapper;
+
+    @PostMapping("/search")
+    public ApiResponse<ProductResponse> searchById(@RequestParam("id") String id){
+        log.info("Searching for product with ID: {}", id);
+        return ApiResponse.<ProductResponse>builder()
+                .code(200)
+                .message("Product found")
+                .result(productService.findById(id))
+                .build();
+    }
+
+    @PostMapping("/searchBySeller")
+    public ApiResponse<List<ProductResponse>> searchBySeller(@RequestParam("sellerId") String sellerId) {
+        log.info("Searching for products by seller ID: {}", sellerId);
+        return ApiResponse.<List<ProductResponse>>builder()
+                .code(200)
+                .message("Products found for seller")
+                .result(productService.findAllBySellerId(sellerId))
+                .build();
+    }
+
+    @PostMapping("/searchBySizeAndID")
+    public ApiResponse<OrderItemProductResponse> searchBySizeAndID(@Valid @RequestBody SearchSizeAndIDRequest request) {
+        log.info("Searching for products with request: {}", request);
+        return ApiResponse.<OrderItemProductResponse>builder()
+                .code(200)
+                .message("Products found by size and ID")
+                .result(productService.findByIdAndSize(request))
+                .build();
+    }
 
     @GetMapping("/getProducts")
     public ApiResponse<List<ProductResponse>> getAllProducts() {
