@@ -3,11 +3,14 @@ package iuh.fit.se.service.impl;
 import iuh.fit.se.dto.request.DeleteRequest;
 import iuh.fit.se.dto.request.ProductRequest;
 import iuh.fit.se.dto.request.ProductUpdateRequest;
+import iuh.fit.se.dto.request.SearchSizeAndIDRequest;
 import iuh.fit.se.dto.response.FileClientResponse;
+import iuh.fit.se.dto.response.OrderItemProductResponse;
 import iuh.fit.se.dto.response.ProductResponse;
 import iuh.fit.se.entity.Product;
 import iuh.fit.se.entity.enums.Status;
 import iuh.fit.se.entity.records.Image;
+import iuh.fit.se.entity.records.Size;
 import iuh.fit.se.exception.AppException;
 import iuh.fit.se.exception.ErrorCode;
 import iuh.fit.se.mapper.ProductMapper;
@@ -198,5 +201,30 @@ public class ProductServiceImpl implements ProductService {
         return productRepository.findBySellerId(sellerId).stream()
                 .map(productMapper::toProductResponse)
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public OrderItemProductResponse findByIdAndSize(SearchSizeAndIDRequest request) {
+        Product product = productRepository.findById(request.getId())
+                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+
+        Size selectedSize = product.getSizes().stream()
+                .filter(s -> s.size().equals(request.getSize()))
+                .findFirst()
+                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+
+        return OrderItemProductResponse.builder()
+                .productId(product.getId())
+                .sellerId(product.getSellerId())
+                .name(product.getName())
+                .image(product.getImages() != null && !product.getImages().isEmpty()
+                        ? product.getImages().get(0).url() : null)
+                .size(selectedSize.size())
+                .price(selectedSize.price())
+                .compareAtPrice(selectedSize.compareAtPrice())
+                .available(selectedSize.available())
+                .stock(selectedSize.quantity())
+                .status(product.getStatus().name())
+                .build();
     }
 }
