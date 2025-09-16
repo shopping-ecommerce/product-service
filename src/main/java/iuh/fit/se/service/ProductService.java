@@ -1,5 +1,7 @@
 package iuh.fit.se.service;
 
+import iuh.fit.event.dto.OrderCreatedEvent;
+import iuh.fit.event.dto.OrderStatusChangedEvent;
 import iuh.fit.se.dto.request.ProductRequest;
 import iuh.fit.se.dto.request.ProductUpdateRequest;
 import iuh.fit.se.dto.request.SearchSizeAndIDRequest;
@@ -19,4 +21,7 @@ public interface ProductService {
     List<ProductResponse> findAllBySellerId(String sellerId);
 
     OrderItemProductResponse findByIdAndSize(SearchSizeAndIDRequest request);
+
+    void updateStockFromOrder(OrderCreatedEvent event);
+    void restoreStockFromOrder(OrderStatusChangedEvent event);
 }
