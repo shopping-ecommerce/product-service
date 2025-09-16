@@ -77,7 +77,9 @@ public enum ErrorCode {
     TOKEN_EXPIRED(1044, "Token expired", HttpStatus.UNAUTHORIZED),
     REFRESH_TOKEN_INVALID(1045, "Refresh token invalid", HttpStatus.UNAUTHORIZED),
     PRODUCT_NOT_FOUND(1046, "Product not found", HttpStatus.NOT_FOUND),
-    CATEGORY_NOT_FOUND(1047, "Category not found", HttpStatus.NOT_FOUND),;
+    CATEGORY_NOT_FOUND(1047, "Category not found", HttpStatus.NOT_FOUND),
+    QUANTITY_INVALID(1048, "Quantity must be greater than zero", HttpStatus.BAD_REQUEST),
+    CONCURRENT_MODIFICATION(1049, "Concurrent Product update conflict", HttpStatus.CONFLICT),;
 
     int code;
     String message;

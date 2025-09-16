@@ -1,5 +1,8 @@
 package iuh.fit.se.service.impl;
 
+import iuh.fit.event.dto.OrderCreatedEvent;
+import iuh.fit.event.dto.OrderItemPayload;
+import iuh.fit.event.dto.OrderStatusChangedEvent;
 import iuh.fit.se.dto.request.DeleteRequest;
 import iuh.fit.se.dto.request.ProductRequest;
 import iuh.fit.se.dto.request.ProductUpdateRequest;
@@ -21,6 +24,10 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -39,6 +46,7 @@ public class ProductServiceImpl implements ProductService {
     ProductRepository productRepository;
     ProductMapper productMapper;
     FileClient fileClient;
+    MongoTemplate mongoTemplate;
     @Override
     public ProductResponse findById(String id) {
         Product product = productRepository.findById(id).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
@@ -226,5 +234,101 @@ public class ProductServiceImpl implements ProductService {
                 .stock(selectedSize.quantity())
                 .status(product.getStatus().name())
                 .build();
+    }
+
+    @Override
+    @Transactional
+    public void updateStockFromOrder(OrderCreatedEvent event) {
+        log.info("Cập nhật kho cho đơn hàng: {}", event.getOrderId());
+
+        for (OrderItemPayload item : event.getItems()) {
+            Query query = new Query(Criteria.where("id").is(item.getProductId()));
+            Product product = mongoTemplate.findOne(query, Product.class);
+            if (product == null) {
+                throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
+            }
+
+            List<Size> updatedSizes = product.getSizes().stream()
+                    .map(size -> {
+                        if (size.size().equals(item.getSize())) {
+                            int newQuantity = size.quantity() - item.getQuantity();
+                            if (newQuantity < 0) {
+                                throw new AppException(ErrorCode.QUANTITY_INVALID);
+                            }
+                            return Size.builder()
+                                    .size(size.size())
+                                    .price(size.price())
+                                    .compareAtPrice(size.compareAtPrice())
+                                    .quantity(newQuantity)
+                                    .available(newQuantity > 0)
+                                    .build();
+                        }
+                        return size;
+                    })
+                    .collect(Collectors.toList());
+
+            Update update = new Update()
+                    .set("sizes", updatedSizes)
+                    .set("version", product.getVersion() + 1);
+            long updatedCount = mongoTemplate.updateFirst(
+                    Query.query(Criteria.where("id").is(item.getProductId()).and("version").is(product.getVersion())),
+                    update,
+                    Product.class
+            ).getModifiedCount();
+            if (updatedCount == 0) {
+                throw new AppException(ErrorCode.CONCURRENT_MODIFICATION);
+            }
+            log.info("Đã cập nhật kho cho sản phẩm {} (kích cỡ: {}, số lượng giảm: {})",
+                    item.getProductId(), item.getSize(), item.getQuantity());
+        }
+    }
+
+    @Override
+    @Transactional
+    public void restoreStockFromOrder(OrderStatusChangedEvent event) {
+        log.info("Xử lý hoàn kho cho đơn hàng: {}, trạng thái: {}", event.getOrderId(), event.getStatus());
+
+        if (!"CANCELLED".equals(event.getStatus())) {
+            log.info("Trạng thái đơn hàng {} không phải CANCELLED, bỏ qua hoàn kho", event.getOrderId());
+            return;
+        }
+
+        for (OrderItemPayload item : event.getItems()) {
+            Query query = new Query(Criteria.where("id").is(item.getProductId()));
+            Product product = mongoTemplate.findOne(query, Product.class);
+            if (product == null) {
+                throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
+            }
+
+            List<Size> updatedSizes = product.getSizes().stream()
+                    .map(size -> {
+                        if (size.size().equals(item.getSize())) {
+                            int newQuantity = size.quantity() + item.getQuantity();
+                            return Size.builder()
+                                    .size(size.size())
+                                    .price(size.price())
+                                    .compareAtPrice(size.compareAtPrice())
+                                    .quantity(newQuantity)
+                                    .available(true)
+                                    .build();
+                        }
+                        return size;
+                    })
+                    .collect(Collectors.toList());
+
+            Update update = new Update()
+                    .set("sizes", updatedSizes)
+                    .set("version", product.getVersion() + 1);
+            long updatedCount = mongoTemplate.updateFirst(
+                    Query.query(Criteria.where("id").is(item.getProductId()).and("version").is(product.getVersion())),
+                    update,
+                    Product.class
+            ).getModifiedCount();
+            if (updatedCount == 0) {
+                throw new AppException(ErrorCode.CONCURRENT_MODIFICATION);
+            }
+            log.info("Đã hoàn kho cho sản phẩm {} (kích cỡ: {}, số lượng tăng: {})",
+                    item.getProductId(), item.getSize(), item.getQuantity());
+        }
     }
 }
