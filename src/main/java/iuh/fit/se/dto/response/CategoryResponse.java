@@ -10,6 +10,7 @@ import lombok.experimental.FieldDefaults;
 @NoArgsConstructor
 @AllArgsConstructor
 public class CategoryResponse {
+    String id;
     String name;
     String description;
 }
