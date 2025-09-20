@@ -39,8 +39,8 @@ public class ProductController {
                 .build();
     }
 
-    @PostMapping("/searchBySeller")
-    public ApiResponse<List<ProductResponse>> searchBySeller(@RequestParam("sellerId") String sellerId) {
+    @GetMapping("/searchBySeller/{sellerId}")
+    public ApiResponse<List<ProductResponse>> searchBySeller(@PathVariable("sellerId") String sellerId) {
         log.info("Searching for products by seller ID: {}", sellerId);
         return ApiResponse.<List<ProductResponse>>builder()
                 .code(200)
