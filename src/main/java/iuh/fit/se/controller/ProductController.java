@@ -29,13 +29,13 @@ public class ProductController {
     ProductService productService;
     ObjectMapper objectMapper;
 
-    @PostMapping("/search")
-    public ApiResponse<ProductResponse> searchById(@RequestParam("id") String id){
-        log.info("Searching for product with ID: {}", id);
+    @GetMapping("/searchByProduct/{productId}")
+    public ApiResponse<ProductResponse> searchById(@PathVariable("productId") String productId){
+        log.info("Searching for product with ID: {}", productId);
         return ApiResponse.<ProductResponse>builder()
                 .code(200)
                 .message("Product found")
-                .result(productService.findById(id))
+                .result(productService.findById(productId))
                 .build();
     }
 

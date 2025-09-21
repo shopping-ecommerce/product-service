@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SecurityConfig {
     private final String[] PUBLIC_ENDPOINTS = {
-            "/getProducts","/search","/searchBySeller/**","/searchBySizeAndID",
+            "/getProducts","/searchByProduct/**","/searchBySeller/**","/searchBySizeAndID",
             "/categories"
     };
 
