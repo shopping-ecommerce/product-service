@@ -39,3 +39,14 @@ spring:
             url: ${FEIGN_FILE:http://file-service:8084/file}
             connect-timeout: 30000
             read-timeout: 60000
+
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URI:http://elasticsearch:9200}
+    connection-timeout: 5s
+    socket-timeout: 10s
+    max-retry-attempts: 3
+
+# Custom elasticsearch configuration
+elasticsearch:
+  host: ${ELASTICSEARCH_HOST:elasticsearch}
+  port: 9200

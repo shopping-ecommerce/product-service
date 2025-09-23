@@ -1,5 +1,8 @@
 package iuh.fit.se.service.impl;
 
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch.core.SearchResponse;
+import co.elastic.clients.elasticsearch.core.search.Suggestion;
 import iuh.fit.event.dto.OrderCreatedEvent;
 import iuh.fit.event.dto.OrderItemPayload;
 import iuh.fit.event.dto.OrderStatusChangedEvent;
@@ -11,12 +14,14 @@ import iuh.fit.se.dto.response.FileClientResponse;
 import iuh.fit.se.dto.response.OrderItemProductResponse;
 import iuh.fit.se.dto.response.ProductResponse;
 import iuh.fit.se.entity.Product;
+import iuh.fit.se.entity.ProductElastic;
 import iuh.fit.se.entity.enums.Status;
 import iuh.fit.se.entity.records.Image;
 import iuh.fit.se.entity.records.Size;
 import iuh.fit.se.exception.AppException;
 import iuh.fit.se.exception.ErrorCode;
 import iuh.fit.se.mapper.ProductMapper;
+import iuh.fit.se.repository.ProductElasticRepository;
 import iuh.fit.se.repository.ProductRepository;
 import iuh.fit.se.repository.httpclient.FileClient;
 import iuh.fit.se.service.ProductService;
@@ -32,11 +37,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.io.IOException;
+import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 @Service
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
@@ -44,6 +48,8 @@ import java.util.stream.Collectors;
 @Slf4j
 public class ProductServiceImpl implements ProductService {
     ProductRepository productRepository;
+    ProductElasticRepository productElasticRepository;
+    ElasticsearchClient elasticsearchClient;
     ProductMapper productMapper;
     FileClient fileClient;
     MongoTemplate mongoTemplate;
@@ -82,6 +88,9 @@ public class ProductServiceImpl implements ProductService {
 
         // 4. Lưu DB
         product = productRepository.save(product);
+
+        //5. lưu elasticsearch
+        ProductElastic productElastic = productElasticRepository.save(productMapper.toProductElastic(product));
 
         return productMapper.toProductResponse(product);
     }
@@ -179,37 +188,39 @@ public class ProductServiceImpl implements ProductService {
         if (request.getSizes() != null) product.setSizes(request.getSizes());
         if (request.getPercentDiscount() != null) product.setPercentDiscount(request.getPercentDiscount());
 
+        ProductElastic productElastic = productElasticRepository.save(productMapper.toProductElastic(product));
         return productMapper.toProductResponse(productRepository.save(product));
     }
 
     @Override
     public void deleteProduct(String id) {
         Product product = productRepository.findById(id).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
-        product.builder().status(Status.OUT_OF_STOCK);
+        product.setStatus(Status.OUT_OF_STOCK);
+        productElasticRepository.deleteById(id);
         productRepository.save(product);
     }
 
-    @Override
-    public List<ProductResponse> findAllByCategory(String category) {
-        List<Product> product = productRepository.findByCategoryId(category);
+//    @Override
+//    public List<ProductResponse> findAllByCategory(String category) {
+//        List<Product> product = productRepository.findByCategoryId(category);
+//
+//        return product.stream()
+//                .map(p -> productMapper.toProductResponse(p))
+//                .collect(Collectors.toList());
+//    }
 
-        return product.stream()
-                .map(p -> productMapper.toProductResponse(p))
-                .collect(Collectors.toList());
-    }
+//    @Override
+//    public List<ProductResponse> findAllProducts() {
+//        return productRepository.findAll().stream().map(p-> productMapper.toProductResponse(p))
+//                .collect(Collectors.toList());
+//    }
 
-    @Override
-    public List<ProductResponse> findAllProducts() {
-        return productRepository.findAll().stream().map(p-> productMapper.toProductResponse(p))
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    public List<ProductResponse> findAllBySellerId(String sellerId) {
-        return productRepository.findBySellerId(sellerId).stream()
-                .map(productMapper::toProductResponse)
-                .collect(Collectors.toList());
-    }
+//    @Override
+//    public List<ProductResponse> findAllBySellerId(String sellerId) {
+//        return productRepository.findBySellerId(sellerId).stream()
+//                .map(productMapper::toProductResponse)
+//                .collect(Collectors.toList());
+//    }
 
     @Override
     public OrderItemProductResponse findByIdAndSize(SearchSizeAndIDRequest request) {
@@ -329,6 +340,78 @@ public class ProductServiceImpl implements ProductService {
             }
             log.info("Đã hoàn kho cho sản phẩm {} (kích cỡ: {}, số lượng tăng: {})",
                     item.getProductId(), item.getSize(), item.getQuantity());
+        }
+    }
+
+    @Override
+    public List<ProductResponse> findAllByCategory(String category) {
+        List<ProductElastic> products = productElasticRepository.findByCategoryId(category);
+        return products.stream()
+                .map(productMapper::toProductResponse)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<ProductResponse> findAllProducts() {
+        Iterable<ProductElastic> products = productElasticRepository.findAll();
+        return StreamSupport.stream(products.spliterator(), false)
+                .map(productMapper::toProductResponse)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<ProductResponse> findAllBySellerId(String sellerId) {
+        return productElasticRepository.findBySellerId(sellerId).stream()
+                .map(productMapper::toProductResponse)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<ProductResponse> searchProducts(String query) {
+        List<ProductElastic> products = productElasticRepository.searchByNameOrDescription(query);
+        return products.stream()
+                .map(productMapper::toProductResponse)
+                .collect(Collectors.toList());
+    }
+    public List<String> suggestProducts(String prefix) {
+        if (prefix == null || prefix.trim().isEmpty()) {
+            return List.of();
+        }
+
+        String queryText = prefix.trim();
+
+        try {
+            SearchResponse<Void> resp = elasticsearchClient.search(s -> s
+                            .index("products")
+                            .suggest(sug -> sug
+                                    .text(queryText)
+                                    .suggesters("product-suggest", cs -> cs
+                                            .completion(c -> c
+                                                    .field("nameSuggest")
+                                                    .skipDuplicates(true)
+                                                    .size(8)
+                                            )
+                                    )
+                            ),
+                    Void.class
+            );
+
+            Map<String, List<Suggestion<Void>>> suggestMap = resp.suggest();
+            if (suggestMap == null || suggestMap.isEmpty()) {
+                return List.of();
+            }
+
+            return suggestMap.getOrDefault("product-suggest", List.of())
+                    .stream()
+                    .flatMap(sug -> sug.completion().options().stream())
+                    .map(opt -> opt.text())
+                    .distinct()
+                    .limit(10)
+                    .toList();
+
+        } catch (Exception e) {
+            log.error("Suggest error with prefix '{}': {}", queryText, e.getMessage(), e);
+            return List.of();
         }
     }
 }

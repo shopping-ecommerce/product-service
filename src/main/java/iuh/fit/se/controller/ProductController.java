@@ -19,6 +19,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 
 @RestController
@@ -97,6 +98,35 @@ public class ProductController {
                 .code(200)
                 .message("Product updated successfully")
                 .result(productService.updateProduct(req, files))
+                .build();
+    }
+    @GetMapping("/suggest")
+    public ApiResponse<List<String>> suggestProducts(@RequestParam("prefix") String prefix) throws IOException {
+        log.info("Fetching product suggestions for prefix: {}", prefix);
+        return ApiResponse.<List<String>>builder()
+                .code(200)
+                .message("Product suggestions fetched successfully")
+                .result(productService.suggestProducts(prefix))
+                .build();
+    }
+
+    @GetMapping("/searchByCategory/{categoryId}")
+    public ApiResponse<List<ProductResponse>> searchByCategory(@PathVariable("categoryId") String categoryId) {
+        log.info("Searching for products by category ID: {}", categoryId);
+        return ApiResponse.<List<ProductResponse>>builder()
+                .code(200)
+                .message("Products found for category")
+                .result(productService.findAllByCategory(categoryId))
+                .build();
+    }
+
+    @GetMapping("/search")
+    public ApiResponse<List<ProductResponse>> searchProducts(@RequestParam("query") String query) {
+        log.info("Searching for products with query: {}", query);
+        return ApiResponse.<List<ProductResponse>>builder()
+                .code(200)
+                .message("Products found for search query")
+                .result(productService.searchProducts(query))
                 .build();
     }
 }
