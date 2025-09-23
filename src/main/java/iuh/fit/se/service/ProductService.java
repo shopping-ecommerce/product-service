@@ -9,6 +9,7 @@ import iuh.fit.se.dto.response.OrderItemProductResponse;
 import iuh.fit.se.dto.response.ProductResponse;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 
 public interface ProductService {
@@ -24,4 +25,9 @@ public interface ProductService {
 
     void updateStockFromOrder(OrderCreatedEvent event);
     void restoreStockFromOrder(OrderStatusChangedEvent event);
+
+    //Elasticsearch
+    List<ProductResponse> searchProducts(String query);
+
+    List<String> suggestProducts(String prefix) throws IOException;
 }

@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
 public class SecurityConfig {
     private final String[] PUBLIC_ENDPOINTS = {
             "/getProducts","/searchByProduct/**","/searchBySeller/**","/searchBySizeAndID",
-            "/categories"
+            "/categories","/searchByCategory/**","/suggest","/search"
     };
 
     private CustomJwtDecoder customJwtDecoder;
