@@ -1,0 +1,25 @@
+{
+  "analysis": {
+    "analyzer": {
+      "vietnamese_analyzer": {
+        "type": "custom",
+        "tokenizer": "standard",
+        "filter": [
+          "lowercase",
+          "vietnamese_stop",
+          "vietnamese_keywords"
+        ]
+      }
+    },
+    "filter": {
+      "vietnamese_stop": {
+        "type": "stop",
+        "stopwords": "_vietnamese_"
+      },
+      "vietnamese_keywords": {
+        "type": "keyword_marker",
+        "keywords": []
+      }
+    }
+  }
+}
