@@ -22,7 +22,8 @@
         BigDecimal shippingFee;
         BigDecimal discountAmount;
         BigDecimal totalAmount;
-    
+
+        String voucherCode;
         String status;
         String recipientName;
         String phoneNumber;
