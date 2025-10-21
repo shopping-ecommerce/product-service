@@ -2,6 +2,7 @@ package iuh.fit.se.controller;
 
 import iuh.fit.event.dto.OrderCreatedEvent;
 import iuh.fit.event.dto.OrderStatusChangedEvent;
+import iuh.fit.event.dto.ProductInvalid;
 import iuh.fit.se.service.ProductService;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -50,4 +51,16 @@ public class NotificationController {
             log.error("Lỗi khi hoàn kho cho đơn hàng {}: {}", event.getOrderId(), e.getMessage());
         }
     }
+
+    @KafkaListener(topics = "product-invalid", groupId = "product-service-group", concurrency = "1")
+    public void handleProductInvalidEvent(ProductInvalid productInvalid) {
+        log.info("Nhận được sự kiện product-invalid cho productId: {}", productInvalid.getProductId());
+        try {
+            productService.deleteProduct(productInvalid);
+            log.info("Đã đánh dấu sản phẩm là không hoạt động: {}", productInvalid.getProductId());
+        } catch (Exception e) {
+            log.error("Lỗi khi đánh dấu sản phẩm không hoạt động {}: {}", productInvalid.getProductId(), e.getMessage());
+        }
+    }
+
 }

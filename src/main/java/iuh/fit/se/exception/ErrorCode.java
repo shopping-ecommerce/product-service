@@ -79,7 +79,10 @@ public enum ErrorCode {
     PRODUCT_NOT_FOUND(1046, "Product not found", HttpStatus.NOT_FOUND),
     CATEGORY_NOT_FOUND(1047, "Category not found", HttpStatus.NOT_FOUND),
     QUANTITY_INVALID(1048, "Quantity must be greater than zero", HttpStatus.BAD_REQUEST),
-    CONCURRENT_MODIFICATION(1049, "Concurrent Product update conflict", HttpStatus.CONFLICT),;
+    CONCURRENT_MODIFICATION(1049, "Concurrent Product update conflict", HttpStatus.CONFLICT),
+    FILE_NOT_VALID(1010, "File is not a valid image format", HttpStatus.BAD_REQUEST),
+    IMAGE_CONTENT_NOT_ALLOWED(1011, "Image contains inappropriate content", HttpStatus.BAD_REQUEST),
+    FILE_NOT_EMPTY(1050, "File must not be empty", HttpStatus.BAD_REQUEST);
 
     int code;
     String message;
