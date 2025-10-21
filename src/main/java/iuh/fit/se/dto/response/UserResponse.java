@@ -1,10 +1,10 @@
 package iuh.fit.se.dto.response;
 
-import com.fasterxml.jackson.annotation.JsonProperty;  // Import Jackson annotation
-import java.time.LocalDateTime;
-
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.*;
 import lombok.experimental.FieldDefaults;
+
+import java.time.LocalDateTime;
 
 @Data
 @Builder

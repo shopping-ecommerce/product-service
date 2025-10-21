@@ -75,7 +75,8 @@ public class ProductController {
     public ApiResponse<ProductResponse> createProduct(
             // nhận chuỗi để tránh lỗi content-type
             @RequestParam("product") String data,
-            @RequestPart(value = "images") List<MultipartFile> files
+            @RequestPart(value = "images",required = true)
+            List<MultipartFile> files
     ) throws JsonProcessingException {
         ProductRequest req = objectMapper.readValue(data, ProductRequest.class);
         log.info("Received product request: {}", req);

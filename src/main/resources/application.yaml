@@ -15,8 +15,8 @@ spring:
   # Upload multipart (cho /update kèm ảnh)
   servlet:
     multipart:
-      max-file-size: 50MB
-      max-request-size: 50MB
+      max-file-size: 10MB
+      max-request-size: 10MB
   kafka:
     bootstrap-servers: ${DBKK_CONNECTION:kafka}:9094
     consumer:
@@ -26,6 +26,9 @@ spring:
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
         spring.json.trusted.packages: "*"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
   cloud:
     openfeign:
       client:
@@ -37,6 +40,10 @@ spring:
           # File-service (đọc từ ENV FEIGN_FILE, fallback sang service-name trong network)
           file-service:
             url: ${FEIGN_FILE:http://file-service:8084/file}
+            connect-timeout: 30000
+            read-timeout: 60000
+          user-service:
+            url: ${FEIGN_USER:http://user-service:8082/info}
             connect-timeout: 30000
             read-timeout: 60000
 

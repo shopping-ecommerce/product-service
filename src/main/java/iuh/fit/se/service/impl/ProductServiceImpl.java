@@ -3,16 +3,12 @@ package iuh.fit.se.service.impl;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Suggestion;
-import iuh.fit.event.dto.OrderCreatedEvent;
-import iuh.fit.event.dto.OrderItemPayload;
-import iuh.fit.event.dto.OrderStatusChangedEvent;
+import iuh.fit.event.dto.*;
 import iuh.fit.se.dto.request.DeleteRequest;
 import iuh.fit.se.dto.request.ProductRequest;
 import iuh.fit.se.dto.request.ProductUpdateRequest;
 import iuh.fit.se.dto.request.SearchSizeAndIDRequest;
-import iuh.fit.se.dto.response.FileClientResponse;
-import iuh.fit.se.dto.response.OrderItemProductResponse;
-import iuh.fit.se.dto.response.ProductResponse;
+import iuh.fit.se.dto.response.*;
 import iuh.fit.se.entity.Product;
 import iuh.fit.se.entity.ProductElastic;
 import iuh.fit.se.entity.enums.Status;
@@ -24,6 +20,7 @@ import iuh.fit.se.mapper.ProductMapper;
 import iuh.fit.se.repository.ProductElasticRepository;
 import iuh.fit.se.repository.ProductRepository;
 import iuh.fit.se.repository.httpclient.FileClient;
+import iuh.fit.se.repository.httpclient.UserClient;
 import iuh.fit.se.service.ProductService;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -33,6 +30,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -53,46 +51,120 @@ public class ProductServiceImpl implements ProductService {
     ProductMapper productMapper;
     FileClient fileClient;
     MongoTemplate mongoTemplate;
+    KafkaTemplate<String, Object> kafkaTemplate;
+    UserClient userClient;
     @Override
     public ProductResponse findById(String id) {
         Product product = productRepository.findById(id).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
         return productMapper.toProductResponse(product);
     }
-
     @Override
+    @Transactional
     public ProductResponse createProduct(ProductRequest request, List<MultipartFile> images) {
-        // 1. Upload ảnh đến AWS qua file-service
-        if(images == null || images.isEmpty()) {
-            throw new AppException(ErrorCode.UPLOAD_FILE_FAILED);
-        }
-        FileClientResponse fileClientResponse = fileClient.uploadFile(images);
-        List<String> uploadedUrls = fileClientResponse.getResult();
+        log.info("Creating product with {} images", images != null ? images.size() : 0);
 
-        if (uploadedUrls.isEmpty()) {
+        // 1. Validate input
+        if (images == null || images.isEmpty() ||
+                images.stream().allMatch(f -> f == null || f.isEmpty())) {
+            throw new AppException(ErrorCode.FILE_NOT_EMPTY);
+        }
+
+        List<String> uploadedUrls = null;
+
+        try {
+            // 2. Upload ảnh đến AWS qua file-service (đã validate bên trong)
+            log.info("Uploading {} image(s) to file service", images.size());
+            FileClientResponse fileClientResponse = null;
+
+            try {
+                fileClientResponse = fileClient.uploadFile(images);
+            } catch (feign.FeignException.BadRequest e) {
+                // Parse error message từ file service
+                String errorMsg = e.contentUTF8();
+                log.error("File upload validation failed: {}", errorMsg);
+
+                // Check if it's image content error
+                if (errorMsg.contains("inappropriate") || errorMsg.contains("not allowed")) {
+                    throw new AppException(ErrorCode.IMAGE_CONTENT_NOT_ALLOWED);
+                } else if (errorMsg.contains("not valid") || errorMsg.contains("format")) {
+                    throw new AppException(ErrorCode.FILE_NOT_VALID);
+                }
+                throw new AppException(ErrorCode.UPLOAD_FILE_FAILED);
+            } catch (feign.FeignException e) {
+                log.error("File service error: {}", e.getMessage());
+                throw new AppException(ErrorCode.FEIGN_CLIENT_ERROR);
+            }
+
+            if (fileClientResponse == null || fileClientResponse.getResult() == null) {
+                throw new AppException(ErrorCode.FILE_PROCESSING_ERROR);
+            }
+
+            uploadedUrls = fileClientResponse.getResult();
+
+            if (uploadedUrls.isEmpty()) {
+                throw new AppException(ErrorCode.FILE_PROCESSING_ERROR);
+            }
+
+            log.info("Successfully uploaded {} image(s)", uploadedUrls.size());
+
+            // 3. Ghép URL vào position từ request
+            List<Image> finalImages = new ArrayList<>();
+            for (int i = 0; i < uploadedUrls.size(); i++) {
+                finalImages.add(Image.builder()
+                        .url(uploadedUrls.get(i))
+                        .position(i + 1)
+                        .build());
+            }
+
+            // 4. Map DTO -> Entity
+            Product product = productMapper.toProduct(request);
+            product.setImages(finalImages);
+            product.setStatus(Status.AVAILABLE);
+
+            // 5. Lưu DB
+            product = productRepository.save(product);
+            log.info("Product saved to database with ID: {}", product.getId());
+
+            // 6. Lưu elasticsearch
+            ProductElastic productElastic = productElasticRepository.save(
+                    productMapper.toProductElastic(product)
+            );
+            log.info("Product indexed in Elasticsearch with ID: {}", productElastic.getId());
+
+            return productMapper.toProductResponse(product);
+
+        } catch (AppException e) {
+            // Nếu upload thất bại hoặc validation lỗi, cleanup uploaded files
+            if (uploadedUrls != null && !uploadedUrls.isEmpty()) {
+                log.warn("Rolling back uploaded files due to error: {}", e.getMessage());
+                cleanupUploadedFiles(uploadedUrls);
+            }
+            throw e;
+        } catch (Exception e) {
+            // Cleanup on unexpected errors
+            if (uploadedUrls != null && !uploadedUrls.isEmpty()) {
+                log.error("Unexpected error, rolling back uploaded files", e);
+                cleanupUploadedFiles(uploadedUrls);
+            }
             throw new AppException(ErrorCode.FILE_PROCESSING_ERROR);
         }
+    }
 
-        // 2. Ghép URL vào position từ request
-        List<Image> finalImages = new ArrayList<>();
-        for (int i = 0; i < uploadedUrls.size(); i++) {
-            finalImages.add(Image.builder()
-                            .url((uploadedUrls.get(i)))
-                            .position(i+1)
+    /**
+     * Cleanup uploaded files when product creation fails
+     */
+    private void cleanupUploadedFiles(List<String> urls) {
+        try {
+            log.info("Attempting to delete {} uploaded file(s)", urls.size());
+            FileClientResponse fileClientResponse = fileClient.deleteByUrl(DeleteRequest.builder()
+                    .urls(urls)
                     .build());
+            log.info("Deleted image from product:", fileClientResponse.getMessage());
+            log.info("Successfully cleaned up uploaded files");
+        } catch (Exception e) {
+            log.error("Failed to cleanup uploaded files: {}", e.getMessage(), e);
+            // Don't throw - this is cleanup, shouldn't fail the main operation
         }
-
-        // 3. Map DTO -> Entity
-        Product product = productMapper.toProduct(request);
-        product.setImages(finalImages);
-        product.setStatus(Status.AVAILABLE);
-
-        // 4. Lưu DB
-        product = productRepository.save(product);
-
-        //5. lưu elasticsearch
-        ProductElastic productElastic = productElasticRepository.save(productMapper.toProductElastic(product));
-
-        return productMapper.toProductResponse(product);
     }
 
     @Override
@@ -193,11 +265,19 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
-    public void deleteProduct(String id) {
-        Product product = productRepository.findById(id).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
-        product.setStatus(Status.OUT_OF_STOCK);
-        productElasticRepository.deleteById(id);
+    public void deleteProduct(ProductInvalid productInvalid) {
+        Product product = productRepository.findById(productInvalid.getProductId()).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+        product.setStatus(Status.DISCONTINUED);
+        product.setReasonDelete(productInvalid.getReason());
         productRepository.save(product);
+        productElasticRepository.deleteById(productInvalid.getProductId());
+        ApiResponse<SellerResponse> seller = userClient.searchBySellerId(product.getSellerId());
+        kafkaTemplate.send("product-invalid-notify", ProductInvalidNotify.builder()
+                .productId(product.getId())
+                .productName(product.getName())
+                .reason(productInvalid.getReason())
+                .email(seller.getResult().getEmail())
+                .build());
     }
 
 //    @Override
