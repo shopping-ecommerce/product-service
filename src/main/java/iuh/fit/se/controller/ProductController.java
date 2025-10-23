@@ -2,6 +2,7 @@ package iuh.fit.se.controller;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import iuh.fit.event.dto.ProductInvalid;
 import iuh.fit.se.dto.request.ProductRequest;
 import iuh.fit.se.dto.request.ProductUpdateRequest;
 import iuh.fit.se.dto.request.SearchSizeAndIDRequest;
@@ -128,6 +129,36 @@ public class ProductController {
                 .code(200)
                 .message("Products found for search query")
                 .result(productService.searchProducts(query))
+                .build();
+    }
+    @PostMapping("/deleteProducts")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ApiResponse<ProductResponse> deleteProducts(
+            @RequestParam("sellerId") String sellerId,
+            @RequestParam("reason") String reason
+    ) {
+        log.info("Deleting all products with request: {}", sellerId);
+        productService.discontinueBySellerId(sellerId,reason);
+        return ApiResponse.<ProductResponse>builder()
+                .code(200)
+                .message("Products delete successfully")
+                .build();
+    }
+
+    @PostMapping("/deleteProductBySeller")
+    @PreAuthorize("hasAuthority('DELETE_PRODUCT')")
+    public ApiResponse<ProductResponse> deleteProductBySeller(
+            @RequestParam("productId") String productId,
+            @RequestParam("reason") String reason
+    ) {
+        log.info("Deleting product with request:  {}", productId);
+        productService.deleteProductBySeller(ProductInvalid.builder()
+                        .productId(productId)
+                        .reason(reason)
+                .build());
+        return ApiResponse.<ProductResponse>builder()
+                .code(200)
+                .message("Product delete successfully")
                 .build();
     }
 }

@@ -35,7 +35,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
+import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
@@ -280,27 +280,14 @@ public class ProductServiceImpl implements ProductService {
                 .build());
     }
 
-//    @Override
-//    public List<ProductResponse> findAllByCategory(String category) {
-//        List<Product> product = productRepository.findByCategoryId(category);
-//
-//        return product.stream()
-//                .map(p -> productMapper.toProductResponse(p))
-//                .collect(Collectors.toList());
-//    }
-
-//    @Override
-//    public List<ProductResponse> findAllProducts() {
-//        return productRepository.findAll().stream().map(p-> productMapper.toProductResponse(p))
-//                .collect(Collectors.toList());
-//    }
-
-//    @Override
-//    public List<ProductResponse> findAllBySellerId(String sellerId) {
-//        return productRepository.findBySellerId(sellerId).stream()
-//                .map(productMapper::toProductResponse)
-//                .collect(Collectors.toList());
-//    }
+    @Override
+    public void deleteProductBySeller(ProductInvalid productInvalid) {
+        Product product = productRepository.findById(productInvalid.getProductId()).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+        product.setStatus(Status.DISCONTINUED);
+        product.setReasonDelete(productInvalid.getReason());
+        productRepository.save(product);
+        productElasticRepository.deleteById(productInvalid.getProductId());
+    }
 
     @Override
     public OrderItemProductResponse findByIdAndSize(SearchSizeAndIDRequest request) {
@@ -492,6 +479,41 @@ public class ProductServiceImpl implements ProductService {
         } catch (Exception e) {
             log.error("Suggest error with prefix '{}': {}", queryText, e.getMessage(), e);
             return List.of();
+        }
+    }
+
+    @Override
+    @Transactional
+    public void discontinueBySellerId(String sellerId, String reason) {
+        if (sellerId == null || sellerId.isEmpty()) return;
+
+        Instant now = Instant.now();
+
+        // 1. Update MongoDB
+        Query q = new Query(
+                new Criteria().andOperator(
+                        Criteria.where("sellerId").is(sellerId),
+                        Criteria.where("status").ne(Status.DISCONTINUED)
+                )
+        );
+        Update u = new Update()
+                .set("status", Status.DISCONTINUED)
+                .set("deleteAt", now)
+                .set("reasonDelete", reason);
+
+        var result = mongoTemplate.updateMulti(q, u, Product.class);
+        log.info("Discontinued products of seller {}, matched={}, modified={}",
+                sellerId, result.getMatchedCount(), result.getModifiedCount());
+
+        // 2. Delete Elasticsearch indices
+        List<String> ids = productRepository.findBySellerId(sellerId).stream()
+                .map(Product::getId)
+                .filter(Objects::nonNull)
+                .toList();
+
+        if (!ids.isEmpty()) {
+            productElasticRepository.deleteAllById(ids);
+            log.info("Deleted {} product indices from Elasticsearch", ids.size());
         }
     }
 }

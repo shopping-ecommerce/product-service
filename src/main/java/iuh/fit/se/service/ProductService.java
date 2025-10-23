@@ -22,6 +22,8 @@ public interface ProductService {
     List<ProductResponse> findAllProducts();
     List<ProductResponse> findAllBySellerId(String sellerId);
 
+    void deleteProductBySeller(ProductInvalid productInvalid);
+
     OrderItemProductResponse findByIdAndSize(SearchSizeAndIDRequest request);
 
     void updateStockFromOrder(OrderCreatedEvent event);
@@ -31,4 +33,5 @@ public interface ProductService {
     List<ProductResponse> searchProducts(String query);
 
     List<String> suggestProducts(String prefix) throws IOException;
+    void discontinueBySellerId(String sellerId, String reason);
 }
