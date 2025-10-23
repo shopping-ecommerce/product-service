@@ -132,7 +132,7 @@ public class ProductController {
                 .build();
     }
     @PostMapping("/deleteProducts")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAuthority('DELETE_PRODUCT')")
     public ApiResponse<ProductResponse> deleteProducts(
             @RequestParam("sellerId") String sellerId,
             @RequestParam("reason") String reason
