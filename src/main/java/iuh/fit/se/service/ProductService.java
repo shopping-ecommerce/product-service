@@ -8,6 +8,7 @@ import iuh.fit.se.dto.request.ProductUpdateRequest;
 import iuh.fit.se.dto.request.SearchSizeAndIDRequest;
 import iuh.fit.se.dto.response.OrderItemProductResponse;
 import iuh.fit.se.dto.response.ProductResponse;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -34,4 +35,7 @@ public interface ProductService {
 
     List<String> suggestProducts(String prefix) throws IOException;
     void discontinueBySellerId(String sellerId, String reason);
+
+    @Transactional
+    void updateView(String productId);
 }

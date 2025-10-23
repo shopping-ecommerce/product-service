@@ -38,7 +38,8 @@ public class Product {
     String description;
 
     List<Image> images;
-
+    Integer soldCount;  // Số lượng đã bán (để thống kê)
+    Integer viewCount;  // Lượt xem sản phẩm
     List<Size> sizes;
     @Min(value = 0, message = "Giảm giá không được âm")
     @Max(value = 100, message = "Giảm giá không được vượt quá 100%")

@@ -161,4 +161,16 @@ public class ProductController {
                 .message("Product delete successfully")
                 .build();
     }
+
+    @GetMapping("/view/{id}")
+    public ApiResponse<Object> deleteProductBySeller(
+            @PathVariable("id") String id
+    ) {
+        log.info("Increase view product with request:  {}", id);
+        productService.updateView(id);
+        return ApiResponse.<Object>builder()
+                .code(200)
+                .message("Product increase view successfully")
+                .build();
+    }
 }

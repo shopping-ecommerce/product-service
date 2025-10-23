@@ -120,7 +120,8 @@ public class ProductServiceImpl implements ProductService {
             Product product = productMapper.toProduct(request);
             product.setImages(finalImages);
             product.setStatus(Status.AVAILABLE);
-
+            product.setViewCount(0);
+            product.setSoldCount(0);
             // 5. Lưu DB
             product = productRepository.save(product);
             log.info("Product saved to database with ID: {}", product.getId());
@@ -345,19 +346,26 @@ public class ProductServiceImpl implements ProductService {
                     })
                     .collect(Collectors.toList());
 
+            // Tăng soldCount
+            int currentSoldCount = product.getSoldCount() != null ? product.getSoldCount() : 0;
+
             Update update = new Update()
                     .set("sizes", updatedSizes)
+                    .inc("soldCount", item.getQuantity())  // Tăng số lượng đã bán
                     .set("version", product.getVersion() + 1);
+
             long updatedCount = mongoTemplate.updateFirst(
                     Query.query(Criteria.where("id").is(item.getProductId()).and("version").is(product.getVersion())),
                     update,
                     Product.class
             ).getModifiedCount();
+
             if (updatedCount == 0) {
                 throw new AppException(ErrorCode.CONCURRENT_MODIFICATION);
             }
-            log.info("Đã cập nhật kho cho sản phẩm {} (kích cỡ: {}, số lượng giảm: {})",
-                    item.getProductId(), item.getSize(), item.getQuantity());
+
+            log.info("Đã cập nhật kho cho sản phẩm {} (kích cỡ: {}, số lượng giảm: {}, đã bán tăng: {})",
+                    item.getProductId(), item.getSize(), item.getQuantity(), item.getQuantity());
         }
     }
 
@@ -394,19 +402,27 @@ public class ProductServiceImpl implements ProductService {
                     })
                     .collect(Collectors.toList());
 
+            // Giảm soldCount khi hủy đơn
+            int currentSoldCount = product.getSoldCount() != null ? product.getSoldCount() : 0;
+            int newSoldCount = Math.max(0, currentSoldCount - item.getQuantity()); // Đảm bảo không âm
+
             Update update = new Update()
                     .set("sizes", updatedSizes)
+                    .set("soldCount", newSoldCount)  // Giảm số lượng đã bán
                     .set("version", product.getVersion() + 1);
+
             long updatedCount = mongoTemplate.updateFirst(
                     Query.query(Criteria.where("id").is(item.getProductId()).and("version").is(product.getVersion())),
                     update,
                     Product.class
             ).getModifiedCount();
+
             if (updatedCount == 0) {
                 throw new AppException(ErrorCode.CONCURRENT_MODIFICATION);
             }
-            log.info("Đã hoàn kho cho sản phẩm {} (kích cỡ: {}, số lượng tăng: {})",
-                    item.getProductId(), item.getSize(), item.getQuantity());
+
+            log.info("Đã hoàn kho cho sản phẩm {} (kích cỡ: {}, số lượng tăng: {}, đã bán giảm: {})",
+                    item.getProductId(), item.getSize(), item.getQuantity(), item.getQuantity());
         }
     }
 
@@ -515,5 +531,13 @@ public class ProductServiceImpl implements ProductService {
             productElasticRepository.deleteAllById(ids);
             log.info("Deleted {} product indices from Elasticsearch", ids.size());
         }
+    }
+
+    @Override
+    @Transactional
+    public void updateView(String productId){
+        Product product = productRepository.findById(productId).orElseThrow(()-> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+        product.setViewCount(product.getViewCount() + 1);
+        productRepository.save(product);
     }
 }
