@@ -30,4 +30,6 @@ public class ProductResponse {
     Status status;
     String categoryId;
     Instant createdAt;
+    Integer soldCount;
+    Integer viewCount;
 }

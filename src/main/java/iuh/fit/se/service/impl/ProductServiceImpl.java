@@ -539,5 +539,10 @@ public class ProductServiceImpl implements ProductService {
         Product product = productRepository.findById(productId).orElseThrow(()-> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
         product.setViewCount(product.getViewCount() + 1);
         productRepository.save(product);
+
+        ProductElastic productElastic = productElasticRepository.findById(productId)
+                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+        productElastic.setViewCount(product.getViewCount());
+        productElasticRepository.save(productElastic);
     }
 }
