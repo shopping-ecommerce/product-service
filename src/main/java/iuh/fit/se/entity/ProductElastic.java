@@ -53,4 +53,8 @@ public class ProductElastic {
     private String sellerId;
     @Field(type = FieldType.Date)
     private Instant createdAt;
+    @Field(type = FieldType.Integer)
+    private Integer soldCount;  // Số lượng đã bán (để thống kê)
+    @Field(type = FieldType.Integer)
+    private Integer viewCount;  // Lượt xem sản phẩm
 }
