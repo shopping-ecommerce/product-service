@@ -2,7 +2,9 @@ package iuh.fit.se.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import iuh.fit.se.entity.records.Image;
-import iuh.fit.se.entity.records.Size;
+import iuh.fit.se.entity.records.OptionDef;
+import iuh.fit.se.entity.records.OptionMediaGroup;
+import iuh.fit.se.entity.records.Variant;
 import lombok.*;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.elasticsearch.annotations.*;
@@ -38,8 +40,11 @@ public class ProductElastic {
     private List<Image> images;
 
     @Field(type = FieldType.Nested)
-    private List<Size> sizes;
-
+    private List<Variant> variants;
+    @Field(type = FieldType.Nested)
+    List<OptionDef> optionDefs;         // khai báo các trục biến thể
+    @Field(type = FieldType.Nested)
+    List<OptionMediaGroup> mediaByOption; // ảnh theo 1 trục (thường Color)
     @Field(type = FieldType.Double)
     private Double percentDiscount;
 

@@ -30,8 +30,9 @@ public interface ProductMapper {
     @Mapping(target = "id", source = "id")
     @Mapping(target = "description", source = "description")
     @Mapping(target = "images", source = "images")
-    @Mapping(target = "sizes", source = "sizes")
-    @Mapping(target = "percentDiscount", source = "percentDiscount")
+    @Mapping(target = "variants", source = "variants")
+    @Mapping(target = "mediaByOption", source = "mediaByOption")
+    @Mapping(target = "optionDefs", source = "optionDefs")
     @Mapping(target = "categoryId", source = "categoryId")
     @Mapping(target = "sellerId", source = "sellerId")
     @Mapping(target = "createdAt", source = "createdAt") // Added mapping for createdAt

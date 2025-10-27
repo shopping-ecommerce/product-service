@@ -4,6 +4,7 @@ import lombok.*;
 import lombok.experimental.FieldDefaults;
 
 import java.math.BigDecimal;
+import java.util.Map;
 
 @Data
 @NoArgsConstructor
@@ -13,7 +14,7 @@ import java.math.BigDecimal;
 public class OrderItemPayload {
     String productId;
     String productName;
-    String size;
+    Map<String, String> options;
     String orderId;
     Integer quantity;
     BigDecimal subTotal;

@@ -1,8 +1,9 @@
 package iuh.fit.se.dto.request;
 
 import iuh.fit.se.entity.enums.Status;
-import iuh.fit.se.entity.records.Image;
-import iuh.fit.se.entity.records.Size;
+import iuh.fit.se.entity.records.OptionDef;
+import iuh.fit.se.entity.records.OptionMediaGroup;
+import iuh.fit.se.entity.records.Variant;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import lombok.*;
@@ -21,7 +22,9 @@ public class ProductUpdateRequest {
     String id;
     String name;
     String description;
-    List<Size> sizes;
+    List<OptionDef> optionDefs;               // ["Color":["Black","White"], "Size":["M","L"]]
+    List<OptionMediaGroup> mediaByOption;     // [{optionName:"Color", optionValue:"Black", image:"0|1|URL"}]
+    List<Variant> variants;
     String categoryId;
     Double percentDiscount;
     Status status;
