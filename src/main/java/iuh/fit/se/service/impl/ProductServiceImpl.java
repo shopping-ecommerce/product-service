@@ -505,7 +505,10 @@ public class ProductServiceImpl implements ProductService {
                 }
             }
         }
-
+        if (selected == null) {
+            // nên có ErrorCode.VARIANT_NOT_FOUND; nếu chưa có, tạm dùng PRODUCT_NOT_FOUND
+            throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
+        }
         return OrderItemProductResponse.builder()
                 .productId(product.getId())
                 .sellerId(product.getSellerId())
