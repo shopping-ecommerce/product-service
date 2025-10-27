@@ -82,7 +82,8 @@ public enum ErrorCode {
     CONCURRENT_MODIFICATION(1049, "Concurrent Product update conflict", HttpStatus.CONFLICT),
     FILE_NOT_VALID(1010, "File is not a valid image format", HttpStatus.BAD_REQUEST),
     IMAGE_CONTENT_NOT_ALLOWED(1011, "Image contains inappropriate content", HttpStatus.BAD_REQUEST),
-    FILE_NOT_EMPTY(1050, "File must not be empty", HttpStatus.BAD_REQUEST);
+    FILE_NOT_EMPTY(1050, "File must not be empty", HttpStatus.BAD_REQUEST),
+    INVALID_IMAGE_INDEX(1051, "Invalid image index", HttpStatus.BAD_REQUEST);
 
     int code;
     String message;

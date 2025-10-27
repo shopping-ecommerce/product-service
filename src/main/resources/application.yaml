@@ -46,6 +46,10 @@ spring:
             url: ${FEIGN_USER:http://user-service:8082/info}
             connect-timeout: 30000
             read-timeout: 60000
+          gemini-service:
+            url: ${FEIGN_GEMINI:http://gemini-service:5001/gemini}
+            connect-timeout: 30000
+            read-timeout: 60000
 
   elasticsearch:
     uris: ${ELASTICSEARCH_URI:http://elasticsearch:9200}

@@ -4,6 +4,7 @@ import lombok.*;
 import lombok.experimental.FieldDefaults;
 
 import java.math.BigDecimal;
+import java.util.Map;
 
 @Builder
 @FieldDefaults(level = AccessLevel.PRIVATE)
@@ -15,7 +16,8 @@ public class OrderItemProductResponse {
      String sellerId;
      String name;
      String image;   // chỉ lấy ảnh đầu tiên
-     String size;    // size user chọn
+     Map<String, String> options;  // các option đã chọn, ví dụ {"Color":"Black","Size":"M"}
+     String optionsLabel;
      BigDecimal price;
      BigDecimal compareAtPrice;
      Boolean available;

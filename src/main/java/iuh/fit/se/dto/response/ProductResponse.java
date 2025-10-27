@@ -2,14 +2,11 @@ package iuh.fit.se.dto.response;
 
 import iuh.fit.se.entity.enums.Status;
 import iuh.fit.se.entity.records.Image;
-import iuh.fit.se.entity.records.Size;
+import iuh.fit.se.entity.records.OptionDef;
+import iuh.fit.se.entity.records.OptionMediaGroup;
+import iuh.fit.se.entity.records.Variant;
 import lombok.*;
 import lombok.experimental.FieldDefaults;
-import org.springframework.data.annotation.CreatedDate;
-import org.springframework.data.annotation.Id;
-import org.springframework.data.annotation.LastModifiedDate;
-import org.springframework.data.mongodb.core.index.Indexed;
-import org.springframework.data.mongodb.core.index.TextIndexed;
 
 import java.time.Instant;
 import java.util.List;
@@ -26,10 +23,13 @@ public class ProductResponse {
     String name;
     String description;
     List<Image> images;
-    List<Size> sizes;
+    List<OptionDef> optionDefs;
+    List<OptionMediaGroup> mediaByOption;
+    List<Variant> variants;
+    Integer viewCount;
+    Integer soldCount;
     Status status;
     String categoryId;
     Instant createdAt;
-    Integer soldCount;
-    Integer viewCount;
+    Instant updatedAt;
 }

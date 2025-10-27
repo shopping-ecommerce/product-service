@@ -3,23 +3,23 @@ package iuh.fit.se.service.impl;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Suggestion;
+import feign.FeignException;
 import iuh.fit.event.dto.*;
-import iuh.fit.se.dto.request.DeleteRequest;
-import iuh.fit.se.dto.request.ProductRequest;
-import iuh.fit.se.dto.request.ProductUpdateRequest;
-import iuh.fit.se.dto.request.SearchSizeAndIDRequest;
+import iuh.fit.se.dto.request.*;
 import iuh.fit.se.dto.response.*;
 import iuh.fit.se.entity.Product;
 import iuh.fit.se.entity.ProductElastic;
 import iuh.fit.se.entity.enums.Status;
 import iuh.fit.se.entity.records.Image;
-import iuh.fit.se.entity.records.Size;
+import iuh.fit.se.entity.records.OptionMediaGroup;
+import iuh.fit.se.entity.records.Variant;
 import iuh.fit.se.exception.AppException;
 import iuh.fit.se.exception.ErrorCode;
 import iuh.fit.se.mapper.ProductMapper;
 import iuh.fit.se.repository.ProductElasticRepository;
 import iuh.fit.se.repository.ProductRepository;
 import iuh.fit.se.repository.httpclient.FileClient;
+import iuh.fit.se.repository.httpclient.GeminiClient;
 import iuh.fit.se.repository.httpclient.UserClient;
 import iuh.fit.se.service.ProductService;
 import lombok.AccessLevel;
@@ -53,6 +53,7 @@ public class ProductServiceImpl implements ProductService {
     MongoTemplate mongoTemplate;
     KafkaTemplate<String, Object> kafkaTemplate;
     UserClient userClient;
+    GeminiClient geminiClient;
     @Override
     public ProductResponse findById(String id) {
         Product product = productRepository.findById(id).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
@@ -69,21 +70,29 @@ public class ProductServiceImpl implements ProductService {
             throw new AppException(ErrorCode.FILE_NOT_EMPTY);
         }
 
+        // Validate mediaByOption reference hợp lệ
+        if (request.getMediaByOption() != null) {
+            for (OptionMediaGroup media : request.getMediaByOption()) {
+                int imageIndex = parseImageIndex(media.image());
+                if (imageIndex < 0 || imageIndex >= images.size()) {
+                    throw new AppException(ErrorCode.INVALID_IMAGE_INDEX);
+                }
+            }
+        }
+
         List<String> uploadedUrls = null;
 
         try {
-            // 2. Upload ảnh đến AWS qua file-service (đã validate bên trong)
+            // 2. Upload TẤT CẢ ảnh lên AWS
             log.info("Uploading {} image(s) to file service", images.size());
-            FileClientResponse fileClientResponse = null;
+            FileClientResponse fileClientResponse;
 
             try {
                 fileClientResponse = fileClient.uploadFile(images);
             } catch (feign.FeignException.BadRequest e) {
-                // Parse error message từ file service
                 String errorMsg = e.contentUTF8();
                 log.error("File upload validation failed: {}", errorMsg);
 
-                // Check if it's image content error
                 if (errorMsg.contains("inappropriate") || errorMsg.contains("not allowed")) {
                     throw new AppException(ErrorCode.IMAGE_CONTENT_NOT_ALLOWED);
                 } else if (errorMsg.contains("not valid") || errorMsg.contains("format")) {
@@ -107,42 +116,72 @@ public class ProductServiceImpl implements ProductService {
 
             log.info("Successfully uploaded {} image(s)", uploadedUrls.size());
 
-            // 3. Ghép URL vào position từ request
-            List<Image> finalImages = new ArrayList<>();
+            // 3. Tạo danh sách Image TỔNG (tất cả ảnh của sản phẩm)
+            List<Image> allImages = new ArrayList<>();
             for (int i = 0; i < uploadedUrls.size(); i++) {
-                finalImages.add(Image.builder()
+                allImages.add(Image.builder()
                         .url(uploadedUrls.get(i))
                         .position(i + 1)
                         .build());
             }
 
-            // 4. Map DTO -> Entity
+            // 4. Map mediaByOption: từ imageIndex -> URL thực tế
+            List<OptionMediaGroup> mappedMediaByOption = new ArrayList<>();
+            if (request.getMediaByOption() != null) {
+                for (OptionMediaGroup mediaGroup : request.getMediaByOption()) {
+                    int imageIndex = parseImageIndex(mediaGroup.image());
+
+                    // Lấy URL từ uploadedUrls theo index
+                    String imageUrl = uploadedUrls.get(imageIndex);
+
+                    mappedMediaByOption.add(OptionMediaGroup.builder()
+                            .optionName(mediaGroup.optionName())
+                            .optionValue(mediaGroup.optionValue())
+                            .image(imageUrl)  // URL đầy đủ
+                            .build());
+                }
+            }
+
+            // 5. Map DTO -> Entity
             Product product = productMapper.toProduct(request);
-            product.setImages(finalImages);
+            product.setImages(allImages);  // TẤT CẢ ảnh
+            product.setMediaByOption(mappedMediaByOption);  // Ánh xạ ảnh -> option
             product.setStatus(Status.AVAILABLE);
             product.setViewCount(0);
             product.setSoldCount(0);
-            // 5. Lưu DB
+
+            // 6. Lưu DB
             product = productRepository.save(product);
             log.info("Product saved to database with ID: {}", product.getId());
 
-            // 6. Lưu elasticsearch
+            // 7. Lưu elasticsearch
             ProductElastic productElastic = productElasticRepository.save(
                     productMapper.toProductElastic(product)
             );
             log.info("Product indexed in Elasticsearch with ID: {}", productElastic.getId());
-
+            try {
+                log.info("Indexing product {} in Gemini", product.getId());
+                geminiClient.indexSingleProduct(IndexSingleProductRequest.builder()
+                        .product_id(product.getId())
+                        .force_reindex(true)
+                        .build());
+                log.info("Indexing product {} images in Gemini", product.getId());
+                geminiClient.indexSingleProductImages(IndexSingleProductImagesRequest.builder()
+                        .product_id(product.getId())
+                        .force_reindex(true)
+                        .build());
+            } catch (FeignException e){
+                log.error("Gemini indexing error for product {}: {}", product.getId(), e.getMessage());
+            };
             return productMapper.toProductResponse(product);
 
         } catch (AppException e) {
-            // Nếu upload thất bại hoặc validation lỗi, cleanup uploaded files
             if (uploadedUrls != null && !uploadedUrls.isEmpty()) {
                 log.warn("Rolling back uploaded files due to error: {}", e.getMessage());
                 cleanupUploadedFiles(uploadedUrls);
             }
             throw e;
         } catch (Exception e) {
-            // Cleanup on unexpected errors
             if (uploadedUrls != null && !uploadedUrls.isEmpty()) {
                 log.error("Unexpected error, rolling back uploaded files", e);
                 cleanupUploadedFiles(uploadedUrls);
@@ -168,22 +207,34 @@ public class ProductServiceImpl implements ProductService {
         }
     }
 
+    private int parseImageIndex(String imageRef) {
+        if (imageRef == null || imageRef.isEmpty()) {
+            return -1;
+        }
+
+        try {
+            // Nếu là số thuần (0, 1, 2...)
+            return Integer.parseInt(imageRef);
+        } catch (NumberFormatException e) {
+            // Nếu đã là URL (trường hợp update), tìm trong uploadedUrls
+            return -1;
+        }
+    }
     @Override
     @Transactional
     public ProductResponse updateProduct(ProductUpdateRequest request, List<MultipartFile> images) {
         Product product = productRepository.findById(request.getId())
                 .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
 
-        // === 0) Lọc file hợp lệ (tránh gọi file-service khi rỗng) ===
+        // 0) Lọc file hợp lệ
         List<MultipartFile> validFiles = (images == null) ? List.of()
                 : images.stream().filter(f -> f != null && !f.isEmpty() && f.getSize() > 0).toList();
 
         log.info("Update product {}, incomingFiles={}, validFiles={}",
                 request.getId(), images == null ? 0 : images.size(), validFiles.size());
 
-        // === 1) Lấy & chuẩn hoá position 1..n hiện tại ===
+        // 1) Normalize position 1..n
         List<Image> working = new ArrayList<>(product.getImages() != null ? product.getImages() : List.of());
-        // sort theo position (null đưa xuống cuối)
         working.sort((a, b) -> {
             int pa = a.position() == null ? Integer.MAX_VALUE : a.position();
             int pb = b.position() == null ? Integer.MAX_VALUE : b.position();
@@ -192,17 +243,20 @@ public class ProductServiceImpl implements ProductService {
         List<Image> normalized = new ArrayList<>(working.size());
         for (int i = 0; i < working.size(); i++) {
             Image img = working.get(i);
-            normalized.add(Image.builder()
-                    .url(img.url())
-                    .position(i + 1)
-                    .build());
+            normalized.add(Image.builder().url(img.url()).position(i + 1).build());
         }
         working = normalized;
 
-        // === 2) Xoá theo position (nếu có) ===
+        // **LƯU LẠI MAPPING CŨ: position -> URL (trước khi xóa/thêm)**
+        Map<Integer, String> oldPositionToUrl = new HashMap<>();
+        for (Image img : working) {
+            oldPositionToUrl.put(img.position(), img.url());
+        }
+
+        // 2) Xóa theo position
+        Set<String> removedImageUrls = new HashSet<>();
         if (request.getRemoveImage() != null && !request.getRemoveImage().isEmpty()) {
             Set<Integer> removePositions = new HashSet<>(request.getRemoveImage());
-
             int size = working.size();
             for (Integer p : removePositions) {
                 if (p == null || p < 1 || p > size) {
@@ -210,59 +264,172 @@ public class ProductServiceImpl implements ProductService {
                 }
             }
             List<Image> kept = new ArrayList<>();
-            List<String> removeImages  = new ArrayList<>();
             for (Image img : working) {
                 if (!removePositions.contains(img.position())) {
                     kept.add(img);
-                }else{
-                    removeImages.add(img.url());
+                } else {
+                    removedImageUrls.add(img.url());
                 }
             }
             log.info("Removing {} image(s) from product {}, kept {} images",
-                    removeImages.getFirst(), product.getId(), kept.size());
-            // Gọi file-service để xoá ảnh
-            FileClientResponse fileClientResponse = fileClient.deleteByUrl(DeleteRequest.builder()
-                    .urls(removeImages)
-                    .build());
-            log.info("Deleted image from product:", fileClientResponse.getMessage());
+                    removedImageUrls.size(), product.getId(), kept.size());
+
+            // Xóa file vật lý
+            if (!removedImageUrls.isEmpty()) {
+                FileClientResponse delResp = fileClient.deleteByUrl(DeleteRequest.builder()
+                        .urls(new ArrayList<>(removedImageUrls))
+                        .build());
+                log.info("Deleted images response: {}", delResp.getMessage());
+            }
 
             working = kept;
         }
 
-        // === 3) Upload & append ảnh mới vào cuối (nếu có) ===
+        // 3) Upload & append ảnh mới
         if (!validFiles.isEmpty()) {
             FileClientResponse up = fileClient.uploadFile(validFiles);
             List<String> urls = (up == null) ? null : up.getResult();
             if (urls == null || urls.isEmpty()) {
                 throw new AppException(ErrorCode.FILE_PROCESSING_ERROR);
             }
-
             int nextPos = working.size() + 1;
             for (String url : urls) {
                 working.add(Image.builder().url(url).position(nextPos++).build());
             }
         }
 
-        // === 4) Chuẩn hoá lại position 1..n lần cuối ===
+        // 4) Normalize lại position 1..n lần cuối
         List<Image> finalImages = new ArrayList<>(working.size());
         for (int i = 0; i < working.size(); i++) {
-            finalImages.add(Image.builder()
-                    .url(working.get(i).url())
-                    .position(i + 1)
-                    .build());
+            finalImages.add(Image.builder().url(working.get(i).url()).position(i + 1).build());
         }
         product.setImages(finalImages);
 
-        // === 5) Partial update các field khác ===
+        // **TẠO MAPPING MỚI: URL -> position mới**
+        Map<String, Integer> newUrlToPosition = new HashMap<>();
+        for (Image img : finalImages) {
+            newUrlToPosition.put(img.url(), img.position());
+        }
+
+        // 5) Partial update các field khác
         if (request.getName() != null) product.setName(request.getName());
         if (request.getDescription() != null) product.setDescription(request.getDescription());
         if (request.getStatus() != null) product.setStatus(request.getStatus());
         if (request.getCategoryId() != null) product.setCategoryId(request.getCategoryId());
-        if (request.getSizes() != null) product.setSizes(request.getSizes());
-        if (request.getPercentDiscount() != null) product.setPercentDiscount(request.getPercentDiscount());
+        if (request.getOptionDefs() != null) product.setOptionDefs(request.getOptionDefs());
+        if (request.getVariants() != null) product.setVariants(request.getVariants());
 
-        ProductElastic productElastic = productElasticRepository.save(productMapper.toProductElastic(product));
-        return productMapper.toProductResponse(productRepository.save(product));
+        // 6) **XỬ LÝ mediaByOption THÔNG MINH**
+        if (request.getMediaByOption() != null) {
+            // 6.1) Request gửi mediaByOption mới -> replace hoàn toàn
+            List<OptionMediaGroup> mapped = new ArrayList<>();
+            for (OptionMediaGroup mg : request.getMediaByOption()) {
+                String resolvedUrl = resolveImageRefToUrl(mg.image(), finalImages);
+                if (resolvedUrl == null) {
+                    throw new AppException(ErrorCode.INVALID_IMAGE_INDEX);
+                }
+                mapped.add(OptionMediaGroup.builder()
+                        .optionName(mg.optionName())
+                        .optionValue(mg.optionValue())
+                        .image(resolvedUrl)
+                        .build());
+            }
+            product.setMediaByOption(mapped);
+        } else {
+            // 6.2) **KHÔNG gửi mediaByOption -> TỰ ĐỘNG CẬP NHẬT**
+            if (product.getMediaByOption() != null && !product.getMediaByOption().isEmpty()) {
+                List<OptionMediaGroup> updatedMediaByOption = new ArrayList<>();
+
+                for (OptionMediaGroup mg : product.getMediaByOption()) {
+                    String currentImageUrl = mg.image();
+
+                    // **Kiểm tra ảnh có bị xóa không**
+                    if (removedImageUrls.contains(currentImageUrl)) {
+                        log.info("Removing mediaByOption mapping for deleted image: {}", currentImageUrl);
+                        continue; // Bỏ qua mapping này
+                    }
+
+                    // **Kiểm tra ảnh còn tồn tại không**
+                    if (!newUrlToPosition.containsKey(currentImageUrl)) {
+                        log.warn("Image URL {} no longer exists, removing mapping", currentImageUrl);
+                        continue; // Bỏ qua mapping này
+                    }
+
+                    // **Giữ lại mapping (position có thể đã thay đổi nhưng URL vẫn hợp lệ)**
+                    updatedMediaByOption.add(mg);
+                }
+
+                product.setMediaByOption(updatedMediaByOption);
+                log.info("Auto-updated mediaByOption: {} -> {} mappings",
+                        product.getMediaByOption().size(), updatedMediaByOption.size());
+            }
+        }
+
+        // 7) Update ES & Mongo
+        productElasticRepository.save(productMapper.toProductElastic(product));
+        Product saved = productRepository.save(product);
+
+        try {
+            // Upsert bản ghi sản phẩm
+            geminiClient.upsertSingleProduct(UpsertSingleProductRequest.builder()
+                    .product_id(product.getId())
+                    .build());
+
+            // Upsert toàn bộ ảnh theo position hiện có
+            for (Image img : product.getImages()) {
+                geminiClient.upsertSingleImageJson(UpsertSingleImageJsonRequest.builder()
+                        .product_id(product.getId())
+                        .position(img.position())
+                        .image_url(img.url())
+                        .build());
+            }
+            log.info("Gemini upserted product {} and {} images", product.getId(),
+                    product.getImages() == null ? 0 : product.getImages().size());
+        } catch (FeignException e) {
+            log.error("Gemini upsert error for product {}: {}", product.getId(), e.getMessage());
+        }
+
+        log.info("Updated product {}. images={}, optionDefs={}, mediaByOption={}, variants={}",
+                saved.getId(),
+                saved.getImages() == null ? 0 : saved.getImages().size(),
+                saved.getOptionDefs() == null ? 0 : saved.getOptionDefs().size(),
+                saved.getMediaByOption() == null ? 0 : saved.getMediaByOption().size(),
+                saved.getVariants() == null ? 0 : saved.getVariants().size()
+        );
+
+        return productMapper.toProductResponse(saved);
+    }
+
+    /**
+     * Resolve 'image' trong mediaByOption thành URL hợp lệ dựa trên danh sách ảnh hiện có.
+     * Hỗ trợ cả:
+     *  - Chỉ số dạng "0", "1", ... (0-based). Nếu out-of-range, thử 1-based.
+     *  - URL tuyệt đối http(s)://
+     */
+    private String resolveImageRefToUrl(String ref, List<Image> images) {
+        if (ref == null || ref.isBlank()) return null;
+
+        // URL?
+        String lower = ref.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("http://") || lower.startsWith("https://")) {
+            return ref;
+        }
+
+        // Index?
+        try {
+            int idx = Integer.parseInt(ref.trim());
+            // 0-based
+            if (idx >= 0 && idx < images.size()) {
+                return images.get(idx).url();
+            }
+            // 1-based
+            int oneBased = idx - 1;
+            if (oneBased >= 0 && oneBased < images.size()) {
+                return images.get(oneBased).url();
+            }
+        } catch (NumberFormatException ignored) {
+        }
+        return null;
     }
 
     @Override
@@ -272,6 +439,18 @@ public class ProductServiceImpl implements ProductService {
         product.setReasonDelete(productInvalid.getReason());
         productRepository.save(product);
         productElasticRepository.deleteById(productInvalid.getProductId());
+        try {
+            log.info("Removing product {} from Gemini index", product.getId());
+            geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
+                    .product_id(product.getId())
+                    .build());
+            log.info("Removing image product {} from Gemini index",product.getId());
+            geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
+                    .product_id(product.getId())
+                    .build());
+        } catch (FeignException e){
+            log.error("Gemini removing index error for product {}: {}",product.getId(), e.getMessage());
+        };
         ApiResponse<SellerResponse> seller = userClient.searchBySellerId(product.getSellerId());
         kafkaTemplate.send("product-invalid-notify", ProductInvalidNotify.builder()
                 .productId(product.getId())
@@ -288,6 +467,18 @@ public class ProductServiceImpl implements ProductService {
         product.setReasonDelete(productInvalid.getReason());
         productRepository.save(product);
         productElasticRepository.deleteById(productInvalid.getProductId());
+        try {
+            log.info("Removing product {} from Gemini index", product.getId());
+            geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
+                    .product_id(product.getId())
+                    .build());
+            log.info("Removing image product {} from Gemini index",product.getId());
+            geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
+                    .product_id(product.getId())
+                    .build());
+        } catch (FeignException e){
+            log.error("Gemini removing index error for product {}: {}",product.getId(), e.getMessage());
+        };
     }
 
     @Override
@@ -295,10 +486,25 @@ public class ProductServiceImpl implements ProductService {
         Product product = productRepository.findById(request.getId())
                 .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
 
-        Size selectedSize = product.getSizes().stream()
-                .filter(s -> s.size().equals(request.getSize()))
-                .findFirst()
-                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+//        Size selectedSize = product.getSizes().stream()
+//                .filter(s -> s.size().equals(request.getSize()))
+//                .findFirst()
+//                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+        Map<String, String> reqOptions = request.getOptions();
+        if (reqOptions == null || reqOptions.isEmpty()) {
+            throw new AppException(ErrorCode.PRODUCT_NOT_FOUND); // hoặc lỗi riêng: MISSING_OPTIONS
+        }
+
+
+        Variant selected = null;
+        if (reqOptions != null && !reqOptions.isEmpty() && product.getVariants() != null) {
+            for (Variant v : product.getVariants()) {
+                if (variantMatches(v, reqOptions)) {
+                    selected = v;
+                    break;
+                }
+            }
+        }
 
         return OrderItemProductResponse.builder()
                 .productId(product.getId())
@@ -306,13 +512,36 @@ public class ProductServiceImpl implements ProductService {
                 .name(product.getName())
                 .image(product.getImages() != null && !product.getImages().isEmpty()
                         ? product.getImages().get(0).url() : null)
-                .size(selectedSize.size())
-                .price(selectedSize.price())
-                .compareAtPrice(selectedSize.compareAtPrice())
-                .available(selectedSize.available())
-                .stock(selectedSize.quantity())
+                // nếu tìm thấy variant thì map các thông tin giá/kho/avail
+                .options(reqOptions)                   // NEW
+                .optionsLabel(formatOptions(reqOptions))
+                .price(selected != null ? selected.price() : null)
+                .compareAtPrice(selected != null ? selected.compareAtPrice() : null)
+                .available(selected != null ? Boolean.TRUE.equals(selected.available()) : null)
+                .stock(selected != null ? selected.quantity() : null)
                 .status(product.getStatus().name())
                 .build();
+    }
+    private String formatOptions(Map<String, String> opts) {
+        if (opts == null || opts.isEmpty()) return null;
+        return opts.entrySet().stream()
+                .map(e -> e.getKey() + ": " + String.valueOf(e.getValue()))
+                .reduce((a, b) -> a + " | " + b)
+                .orElse(null);
+    }
+
+    private boolean variantMatches(Variant v, Map<String, String> reqOptions) {
+        if (v == null || v.options() == null) return false;
+        // yêu cầu: mọi cặp (k,v) trong reqOptions phải có trong v.options()
+        for (Map.Entry<String, String> e : reqOptions.entrySet()) {
+            String key = e.getKey();
+            String val = e.getValue();
+            if (key == null) return false;
+            String vv = v.options().get(key);
+            if (vv == null) return false;
+            if (!vv.equalsIgnoreCase(val == null ? "" : val)) return false;
+        }
+        return true;
     }
 
     @Override
@@ -327,31 +556,57 @@ public class ProductServiceImpl implements ProductService {
                 throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
             }
 
-            List<Size> updatedSizes = product.getSizes().stream()
-                    .map(size -> {
-                        if (size.size().equals(item.getSize())) {
-                            int newQuantity = size.quantity() - item.getQuantity();
-                            if (newQuantity < 0) {
-                                throw new AppException(ErrorCode.QUANTITY_INVALID);
-                            }
-                            return Size.builder()
-                                    .size(size.size())
-                                    .price(size.price())
-                                    .compareAtPrice(size.compareAtPrice())
-                                    .quantity(newQuantity)
-                                    .available(newQuantity > 0)
-                                    .build();
-                        }
-                        return size;
-                    })
-                    .collect(Collectors.toList());
+            // Chuẩn hoá options từ payload
+            Map<String, String> reqOptions = item.getOptions();
+            if (reqOptions == null || reqOptions.isEmpty()) {
+                throw new AppException(ErrorCode.PRODUCT_NOT_FOUND); // hoặc lỗi riêng: MISSING_OPTIONS
+            }
 
-            // Tăng soldCount
-            int currentSoldCount = product.getSoldCount() != null ? product.getSoldCount() : 0;
+
+            Variant selected = null;
+            if (reqOptions != null && !reqOptions.isEmpty() && product.getVariants() != null) {
+                for (Variant v : product.getVariants()) {
+                    if (variantMatches(v, reqOptions)) {
+                        selected = v;
+                        break;
+                    }
+                }
+            }
+            if (product.getVariants() == null || product.getVariants().isEmpty()) {
+                throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
+            }
+
+            // Tìm variant cần trừ kho
+            int idx = -1;
+            for (int i = 0; i < product.getVariants().size(); i++) {
+                if (variantMatches(product.getVariants().get(i), reqOptions)) {
+                    idx = i; break;
+                }
+            }
+            if (idx < 0) {
+                throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
+            }
+
+            Variant target = product.getVariants().get(idx);
+            int currentQty = target.quantity() == null ? 0 : target.quantity();
+            int newQty = currentQty - item.getQuantity();
+            if (newQty < 0) {
+                throw new AppException(ErrorCode.QUANTITY_INVALID);
+            }
+
+            // build danh sách variant mới
+            List<Variant> newVariants = new ArrayList<>(product.getVariants());
+            newVariants.set(idx, Variant.builder()
+                    .options(target.options())
+                    .price(target.price())
+                    .compareAtPrice(target.compareAtPrice())
+                    .quantity(newQty)
+                    .available(newQty > 0)
+                    .build());
 
             Update update = new Update()
-                    .set("sizes", updatedSizes)
-                    .inc("soldCount", item.getQuantity())  // Tăng số lượng đã bán
+                    .set("variants", newVariants)
+                    .inc("soldCount", item.getQuantity())
                     .set("version", product.getVersion() + 1);
 
             long updatedCount = mongoTemplate.updateFirst(
@@ -364,10 +619,11 @@ public class ProductServiceImpl implements ProductService {
                 throw new AppException(ErrorCode.CONCURRENT_MODIFICATION);
             }
 
-            log.info("Đã cập nhật kho cho sản phẩm {} (kích cỡ: {}, số lượng giảm: {}, đã bán tăng: {})",
-                    item.getProductId(), item.getSize(), item.getQuantity(), item.getQuantity());
+            log.info("Đã cập nhật kho cho sản phẩm {} (options: {}, giảm: {}, soldCount+={})",
+                    item.getProductId(), reqOptions, item.getQuantity(), item.getQuantity());
         }
     }
+
 
     @Override
     @Transactional
@@ -386,29 +642,56 @@ public class ProductServiceImpl implements ProductService {
                 throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
             }
 
-            List<Size> updatedSizes = product.getSizes().stream()
-                    .map(size -> {
-                        if (size.size().equals(item.getSize())) {
-                            int newQuantity = size.quantity() + item.getQuantity();
-                            return Size.builder()
-                                    .size(size.size())
-                                    .price(size.price())
-                                    .compareAtPrice(size.compareAtPrice())
-                                    .quantity(newQuantity)
-                                    .available(true)
-                                    .build();
-                        }
-                        return size;
-                    })
-                    .collect(Collectors.toList());
+            Map<String, String> reqOptions = item.getOptions();
+            if (reqOptions == null || reqOptions.isEmpty()) {
+                throw new AppException(ErrorCode.PRODUCT_NOT_FOUND); // hoặc lỗi riêng: MISSING_OPTIONS
+            }
 
-            // Giảm soldCount khi hủy đơn
+
+            Variant selected = null;
+            if (reqOptions != null && !reqOptions.isEmpty() && product.getVariants() != null) {
+                for (Variant v : product.getVariants()) {
+                    if (variantMatches(v, reqOptions)) {
+                        selected = v;
+                        break;
+                    }
+                }
+            }
+
+            if (product.getVariants() == null || product.getVariants().isEmpty()) {
+                throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
+            }
+
+            int idx = -1;
+            for (int i = 0; i < product.getVariants().size(); i++) {
+                if (variantMatches(product.getVariants().get(i), reqOptions)) {
+                    idx = i; break;
+                }
+            }
+            if (idx < 0) {
+                throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
+            }
+
+            Variant target = product.getVariants().get(idx);
+            int currentQty = target.quantity() == null ? 0 : target.quantity();
+            int newQty = currentQty + item.getQuantity();
+
+            // giảm soldCount nhưng không âm
             int currentSoldCount = product.getSoldCount() != null ? product.getSoldCount() : 0;
-            int newSoldCount = Math.max(0, currentSoldCount - item.getQuantity()); // Đảm bảo không âm
+            int newSoldCount = Math.max(0, currentSoldCount - item.getQuantity());
+
+            List<Variant> newVariants = new ArrayList<>(product.getVariants());
+            newVariants.set(idx, Variant.builder()
+                    .options(target.options())
+                    .price(target.price())
+                    .compareAtPrice(target.compareAtPrice())
+                    .quantity(newQty)
+                    .available(true)
+                    .build());
 
             Update update = new Update()
-                    .set("sizes", updatedSizes)
-                    .set("soldCount", newSoldCount)  // Giảm số lượng đã bán
+                    .set("variants", newVariants)
+                    .set("soldCount", newSoldCount)
                     .set("version", product.getVersion() + 1);
 
             long updatedCount = mongoTemplate.updateFirst(
@@ -421,10 +704,11 @@ public class ProductServiceImpl implements ProductService {
                 throw new AppException(ErrorCode.CONCURRENT_MODIFICATION);
             }
 
-            log.info("Đã hoàn kho cho sản phẩm {} (kích cỡ: {}, số lượng tăng: {}, đã bán giảm: {})",
-                    item.getProductId(), item.getSize(), item.getQuantity(), item.getQuantity());
+            log.info("Đã hoàn kho cho sản phẩm {} (options: {}, tăng: {}, soldCount-={})",
+                    item.getProductId(), reqOptions, item.getQuantity(), item.getQuantity());
         }
     }
+
 
     @Override
     public List<ProductResponse> findAllByCategory(String category) {
@@ -530,6 +814,21 @@ public class ProductServiceImpl implements ProductService {
         if (!ids.isEmpty()) {
             productElasticRepository.deleteAllById(ids);
             log.info("Deleted {} product indices from Elasticsearch", ids.size());
+            for ( String id: ids
+                 ) {
+                try {
+                    log.info("Removing product {} from Gemini index", id);
+                    geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
+                            .product_id(id)
+                            .build());
+                    log.info("Removing image product {} from Gemini index",id);
+                    geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
+                            .product_id(id)
+                            .build());
+                } catch (FeignException e){
+                    log.error("Gemini removing index error for product {}: {}",id, e.getMessage());
+                };
+            }
         }
     }
 
