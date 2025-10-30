@@ -50,14 +50,31 @@ spring:
             url: ${FEIGN_GEMINI:http://gemini-service:5001/gemini}
             connect-timeout: 30000
             read-timeout: 60000
+          review-service:
+            url: ${FEIGN_REVIEW:http://review-service:8088/feedback}
+            connect-timeout: 30000
+            read-timeout: 60000
 
   elasticsearch:
     uris: ${ELASTICSEARCH_URI:http://elasticsearch:9200}
     connection-timeout: 5s
     socket-timeout: 10s
     max-retry-attempts: 3
+product:
+  cleanup:
+    enabled: true
+    days-before-deletion: 30
+    cron: "0 0 2 * * SUN"  # 2h sáng hàng ngày (6-field cho Spring)
+    batch-size: 100
+    delete-images: true
 
 # Custom elasticsearch configuration
 elasticsearch:
   host: ${ELASTICSEARCH_HOST:elasticsearch}
   port: 9200
+service:
+  tokens:
+    file-service: ${FILE_SERVICE_TOKEN:}
+logging:
+  level:
+    iuh.fit.se.batch: INFO

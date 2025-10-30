@@ -437,6 +437,7 @@ public class ProductServiceImpl implements ProductService {
         Product product = productRepository.findById(productInvalid.getProductId()).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
         product.setStatus(Status.DISCONTINUED);
         product.setReasonDelete(productInvalid.getReason());
+        product.setDeleteAt(Instant.now());
         productRepository.save(product);
         productElasticRepository.deleteById(productInvalid.getProductId());
         try {
@@ -465,6 +466,7 @@ public class ProductServiceImpl implements ProductService {
         Product product = productRepository.findById(productInvalid.getProductId()).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
         product.setStatus(Status.DISCONTINUED);
         product.setReasonDelete(productInvalid.getReason());
+        product.setDeleteAt(Instant.now());
         productRepository.save(product);
         productElasticRepository.deleteById(productInvalid.getProductId());
         try {

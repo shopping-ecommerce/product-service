@@ -5,6 +5,7 @@ import feign.Retryer;
 import feign.codec.Encoder;
 import feign.form.spring.SpringFormEncoder;
 import iuh.fit.se.configuration.AuthenticationRequestInterceptor;
+import iuh.fit.se.configuration.FileServiceFeignConfig;
 import iuh.fit.se.dto.request.DeleteRequest;
 import iuh.fit.se.dto.response.FileClientResponse;
 import org.springframework.beans.factory.ObjectFactory;
@@ -21,7 +22,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
-@FeignClient(name = "file-service", configuration = {FileClient.FormConfig.class, AuthenticationRequestInterceptor.class,FileClient.FeignRetryConfig.class,FileClient.FeignLogConfig.class})
+@FeignClient(name = "file-service", configuration = {FileClient.FormConfig.class, FileServiceFeignConfig.class,FileClient.FeignRetryConfig.class,FileClient.FeignLogConfig.class})
 public interface FileClient {
     @PostMapping(value = "/s3/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     FileClientResponse uploadFile(@RequestPart("files") List<MultipartFile> files);
