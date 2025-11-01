@@ -73,7 +73,7 @@ public class ProductCleanupBatchJob {
      * Mặc định mỗi 2 phút (test) nếu không set.
      * Nên set zone Asia/Ho_Chi_Minh để khớp giờ VN.
      */
-    @Scheduled(cron = "${product.cleanup.cron:0 */2 * * * *}", zone = "Asia/Ho_Chi_Minh")
+    @Scheduled(cron = "${product.cleanup.cron:0 0 2 * * SUN}", zone = "Asia/Ho_Chi_Minh")
     public void cleanupDiscontinuedProducts() {
         if (!enabled) {
             log.info("[ProductCleanup] Disabled -> skip");
