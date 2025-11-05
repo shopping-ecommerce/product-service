@@ -68,4 +68,7 @@ public interface ProductService {
      * Kích hoạt lại tất cả sản phẩm của seller (SUSPENDED -> AVAILABLE)
      */
     void activateAllProductsBySeller(String sellerId);
+
+    ProductResponse reregisterProduct(ProductUpdateRequest request, List<MultipartFile> images);
+
 }

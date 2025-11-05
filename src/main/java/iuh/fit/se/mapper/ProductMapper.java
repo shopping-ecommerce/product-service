@@ -38,6 +38,7 @@ public interface ProductMapper {
     @Mapping(target = "createdAt", source = "createdAt") // Added mapping for createdAt
     @Mapping(target = "soldCount",source = "soldCount")
     @Mapping(target = "viewCount",source = "viewCount")
+    @Mapping(target = "reUpdate", source = "reUpdate")
     ProductElastic toProductElastic(Product product);
 
     // Phương thức default để chuyển đổi từ String sang Completion

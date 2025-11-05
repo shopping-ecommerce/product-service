@@ -939,7 +939,7 @@ public class ProductServiceImpl implements ProductService {
                 log.error("Gemini indexing error for product {}: {}", productId, e.getMessage());
             }
         }
-
+        product.setReUpdate(false);
         Product saved = productRepository.save(product);
         log.info("Product {} approved with status: {}", productId, status);
 
@@ -961,7 +961,7 @@ public class ProductServiceImpl implements ProductService {
         product.setStatus(Status.SUSPENDED);
         product.setReasonDelete(reason);
         product.setDeleteAt(Instant.now());
-
+        product.setReUpdate(true);
         // Xóa khỏi Elasticsearch (tạm thời không cho tìm kiếm)
         productElasticRepository.deleteById(productId);
 
@@ -984,27 +984,6 @@ public class ProductServiceImpl implements ProductService {
         return productMapper.toProductResponse(saved);
     }
 
-//    @Override
-//    @Transactional
-//    public ProductResponse reregisterProduct(String productId) {
-//        Product product = productRepository.findById(productId)
-//                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
-//
-//        // Chỉ cho phép đăng ký lại sản phẩm DISCONTINUED hoặc SUSPENDED
-//        if (product.getStatus() != Status.DISCONTINUED && product.getStatus() != Status.SUSPENDED) {
-//            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
-//        }
-//
-//        // Chuyển về trạng thái PENDING để chờ admin duyệt
-//        product.setStatus(Status.PENDING);
-//        product.setReasonDelete(null);
-//        product.setDeleteAt(null);
-//
-//        Product saved = productRepository.save(product);
-//        log.info("Product {} reregistered and set to PENDING status", productId);
-//
-//        return productMapper.toProductResponse(saved);
-//    }
 
     @Override
     @Transactional
@@ -1076,6 +1055,7 @@ public class ProductServiceImpl implements ProductService {
         Update u = new Update()
                 .set("status", Status.AVAILABLE)
                 .set("deleteAt", null)
+                .set("reUpdate",false)
                 .set("reasonDelete", null);
 
         var result = mongoTemplate.updateMulti(q, u, Product.class);
@@ -1111,4 +1091,166 @@ public class ProductServiceImpl implements ProductService {
             }
         }
     }
+
+    @Override
+    @Transactional
+    public ProductResponse reregisterProduct(ProductUpdateRequest request, List<MultipartFile> images) {
+        Product product = productRepository.findById(request.getId())
+                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+
+        // Chỉ cho phép nếu SUSPENDED + reUpdate=true, hoặc DISCONTINUED
+        boolean allow =
+                product.getStatus() == Status.DISCONTINUED
+                        || (product.getStatus() == Status.SUSPENDED && Boolean.TRUE.equals(product.isReUpdate()));
+        if (!allow) {
+            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
+        }
+
+        // 0) Lọc file hợp lệ
+        List<MultipartFile> validFiles = (images == null) ? List.of()
+                : images.stream().filter(f -> f != null && !f.isEmpty() && f.getSize() > 0).toList();
+
+        log.info("Reregister product {}, incomingFiles={}, validFiles={}",
+                request.getId(), images == null ? 0 : images.size(), validFiles.size());
+
+        // 1) Normalize position 1..n
+        List<Image> working = new ArrayList<>(product.getImages() != null ? product.getImages() : List.of());
+        working.sort((a, b) -> {
+            int pa = a.position() == null ? Integer.MAX_VALUE : a.position();
+            int pb = b.position() == null ? Integer.MAX_VALUE : b.position();
+            return Integer.compare(pa, pb);
+        });
+        List<Image> normalized = new ArrayList<>(working.size());
+        for (int i = 0; i < working.size(); i++) {
+            Image img = working.get(i);
+            normalized.add(Image.builder().url(img.url()).position(i + 1).build());
+        }
+        working = normalized;
+
+        // Ghi nhớ URL ảnh cũ
+        Map<Integer, String> oldPositionToUrl = new HashMap<>();
+        for (Image img : working) oldPositionToUrl.put(img.position(), img.url());
+
+        // 2) Xóa ảnh theo position nếu có yêu cầu
+        Set<String> removedImageUrls = new HashSet<>();
+        if (request.getRemoveImage() != null && !request.getRemoveImage().isEmpty()) {
+            Set<Integer> removePositions = new HashSet<>(request.getRemoveImage());
+            int size = working.size();
+            for (Integer p : removePositions) {
+                if (p == null || p < 1 || p > size) {
+                    throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
+                }
+            }
+            List<Image> kept = new ArrayList<>();
+            for (Image img : working) {
+                if (!removePositions.contains(img.position())) kept.add(img);
+                else removedImageUrls.add(img.url());
+            }
+            if (!removedImageUrls.isEmpty()) {
+                try {
+                    FileClientResponse delResp = fileClient.deleteByUrl(DeleteRequest.builder()
+                            .urls(new ArrayList<>(removedImageUrls)).build());
+                    log.info("Deleted images response: {}", delResp.getMessage());
+                } catch (Exception e) {
+                    log.warn("Failed to delete some images during reregister: {}", e.getMessage());
+                }
+            }
+            working = kept;
+        }
+
+        // 3) Upload & append ảnh mới (nếu có)
+        if (!validFiles.isEmpty()) {
+            FileClientResponse up = fileClient.uploadFile(validFiles);
+            List<String> urls = (up == null) ? null : up.getResult();
+            if (urls == null || urls.isEmpty()) {
+                throw new AppException(ErrorCode.FILE_PROCESSING_ERROR);
+            }
+            int nextPos = working.size() + 1;
+            for (String url : urls) {
+                working.add(Image.builder().url(url).position(nextPos++).build());
+            }
+        }
+
+        // 4) Normalize lại position 1..n lần cuối
+        List<Image> finalImages = new ArrayList<>(working.size());
+        for (int i = 0; i < working.size(); i++) {
+            finalImages.add(Image.builder().url(working.get(i).url()).position(i + 1).build());
+        }
+        product.setImages(finalImages);
+
+        // Map URL -> position mới
+        Map<String, Integer> newUrlToPosition = new HashMap<>();
+        for (Image img : finalImages) newUrlToPosition.put(img.url(), img.position());
+
+        // 5) Partial update các field (giống updateProduct)
+        if (request.getName() != null) product.setName(request.getName());
+        if (request.getDescription() != null) product.setDescription(request.getDescription());
+        if (request.getCategoryId() != null) product.setCategoryId(request.getCategoryId());
+        if (request.getOptionDefs() != null) product.setOptionDefs(request.getOptionDefs());
+        if (request.getVariants() != null) product.setVariants(request.getVariants());
+        // KHÔNG cho client set status ở flow này
+
+        // 6) mediaByOption
+        if (request.getMediaByOption() != null) {
+            List<OptionMediaGroup> mapped = new ArrayList<>();
+            for (OptionMediaGroup mg : request.getMediaByOption()) {
+                String resolvedUrl = resolveImageRefToUrl(mg.image(), finalImages);
+                if (resolvedUrl == null) throw new AppException(ErrorCode.INVALID_IMAGE_INDEX);
+                mapped.add(OptionMediaGroup.builder()
+                        .optionName(mg.optionName())
+                        .optionValue(mg.optionValue())
+                        .image(resolvedUrl)
+                        .build());
+            }
+            product.setMediaByOption(mapped);
+        } else {
+            if (product.getMediaByOption() != null && !product.getMediaByOption().isEmpty()) {
+                List<OptionMediaGroup> updatedMediaByOption = new ArrayList<>();
+                for (OptionMediaGroup mg : product.getMediaByOption()) {
+                    String currentImageUrl = mg.image();
+                    if (removedImageUrls.contains(currentImageUrl)) continue;
+                    if (!newUrlToPosition.containsKey(currentImageUrl)) continue;
+                    updatedMediaByOption.add(mg);
+                }
+                product.setMediaByOption(updatedMediaByOption);
+                log.info("Auto-updated mediaByOption (reregister): {} -> {} mappings",
+                        (product.getMediaByOption() == null ? 0 : product.getMediaByOption().size()),
+                        updatedMediaByOption.size());
+            }
+        }
+
+        // 7) Đặt trạng thái về PENDING & reset reason/deleteAt
+        product.setStatus(Status.PENDING);
+        product.setReasonDelete(null);
+        product.setDeleteAt(null);
+
+        // 8) Đảm bảo không còn trong Elasticsearch
+        try {
+            productElasticRepository.deleteById(product.getId());
+        } catch (Exception ignore) { }
+
+        // 9) Đảm bảo không còn trong Gemini index
+        try {
+            geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
+                    .product_id(product.getId()).build());
+            geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
+                    .product_id(product.getId()).build());
+        } catch (FeignException e) {
+            log.warn("Gemini remove on reregister (safe to ignore): {}", e.getMessage());
+        }
+
+        // 10) Lưu Mongo
+        Product saved = productRepository.save(product);
+
+        log.info("Product {} re-registered. Status=PENDING, images={}, optionDefs={}, mediaByOption={}, variants={}",
+                saved.getId(),
+                saved.getImages() == null ? 0 : saved.getImages().size(),
+                saved.getOptionDefs() == null ? 0 : saved.getOptionDefs().size(),
+                saved.getMediaByOption() == null ? 0 : saved.getMediaByOption().size(),
+                saved.getVariants() == null ? 0 : saved.getVariants().size()
+        );
+
+        return productMapper.toProductResponse(saved);
+    }
+
 }
