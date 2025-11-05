@@ -62,4 +62,6 @@ public class ProductElastic {
     private Integer soldCount;  // Số lượng đã bán (để thống kê)
     @Field(type = FieldType.Integer)
     private Integer viewCount;  // Lượt xem sản phẩm
+    @Field(type = FieldType.Boolean)
+    private boolean reUpdate; // cờ để đánh dấu cần re-update dữ liệu
 }

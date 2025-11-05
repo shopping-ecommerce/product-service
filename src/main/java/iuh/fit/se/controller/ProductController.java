@@ -250,20 +250,23 @@ public class ProductController {
     /**
      * Seller đăng ký lại sản phẩm bị DISCONTINUED hoặc SUSPENDED
      * Sản phẩm sẽ chuyển về trạng thái PENDING để chờ admin duyệt lại
-     * @param productId ID sản phẩm
      */
-//    @PostMapping("/reregister/{productId}")
-//    @PreAuthorize("hasAuthority('UPDATE_PRODUCT')")
-//    public ApiResponse<ProductResponse> reregisterProduct(
-//            @PathVariable("productId") String productId
-//    ) {
-//        log.info("Seller reregistering product: {}", productId);
-//        return ApiResponse.<ProductResponse>builder()
-//                .code(200)
-//                .message("Product reregistered successfully and pending for approval")
-//                .result(productService.reregisterProduct(productId))
-//                .build();
-//    }
+// ...
+    @PreAuthorize("hasAuthority('UPDATE_PRODUCT')")
+    @PostMapping(value = "/reregister", consumes = {MediaType.MULTIPART_FORM_DATA_VALUE, MediaType.APPLICATION_JSON_VALUE})
+    public ApiResponse<ProductResponse> reregisterProduct(
+            @RequestParam("product") String data,
+            @RequestPart(value = "images", required = false) List<MultipartFile> files
+    ) throws JsonProcessingException {
+        ProductUpdateRequest req = objectMapper.readValue(data, ProductUpdateRequest.class);
+        log.info("Reregister product with request: {}", req);
+        return ApiResponse.<ProductResponse>builder()
+                .code(200)
+                .message("Product re-registered successfully and pending for approval")
+                .result(productService.reregisterProduct(req, files))
+                .build();
+    }
+
 
     /**
      * Tạm ngưng tất cả sản phẩm của seller (AVAILABLE -> SUSPENDED)

@@ -32,4 +32,5 @@ public class ProductResponse {
     String categoryId;
     Instant createdAt;
     Instant updatedAt;
+    boolean reUpdate;
 }
