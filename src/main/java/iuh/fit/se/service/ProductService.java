@@ -8,6 +8,7 @@ import iuh.fit.se.dto.request.ProductUpdateRequest;
 import iuh.fit.se.dto.request.SearchSizeAndIDRequest;
 import iuh.fit.se.dto.response.OrderItemProductResponse;
 import iuh.fit.se.dto.response.ProductResponse;
+import iuh.fit.se.entity.enums.Status;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -38,4 +39,33 @@ public interface ProductService {
 
     @Transactional
     void updateView(String productId);
+    /**
+     * Lấy danh sách sản phẩm theo trạng thái
+     */
+    List<ProductResponse> findAllByStatus(Status status);
+    /**
+     * Lấy danh sách sản phẩm theo seller và trạng thái
+     */
+    List<ProductResponse> findBySellerIdAndStatus(String sellerId, Status status);
+
+    /**
+     * Admin duyệt sản phẩm: chuyển từ PENDING sang AVAILABLE hoặc DISCONTINUED
+     */
+    ProductResponse approveProduct(String productId, Status status, String reason);
+
+    /**
+     * Tạm ngưng sản phẩm: chuyển sang SUSPENDED
+     */
+    ProductResponse suspendProduct(String productId, String reason);
+
+
+    /**
+     * Tạm ngưng tất cả sản phẩm của seller (AVAILABLE -> SUSPENDED)
+     */
+    void suspendAllProductsBySeller(String sellerId, String reason);
+
+    /**
+     * Kích hoạt lại tất cả sản phẩm của seller (SUSPENDED -> AVAILABLE)
+     */
+    void activateAllProductsBySeller(String sellerId);
 }

@@ -9,6 +9,7 @@ import iuh.fit.se.dto.request.SearchSizeAndIDRequest;
 import iuh.fit.se.dto.response.ApiResponse;
 import iuh.fit.se.dto.response.OrderItemProductResponse;
 import iuh.fit.se.dto.response.ProductResponse;
+import iuh.fit.se.entity.enums.Status;
 import iuh.fit.se.service.ProductService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
@@ -173,4 +174,149 @@ public class ProductController {
                 .message("Product increase view successfully")
                 .build();
     }
+
+// ==================== NEW ENDPOINTS ====================
+
+    /**
+     * Lấy danh sách sản phẩm đang chờ duyệt (PENDING)
+     * Dành cho Admin
+     */
+    @GetMapping("/pending")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ApiResponse<List<ProductResponse>> getPendingProducts() {
+        log.info("Fetching pending products for admin approval");
+        return ApiResponse.<List<ProductResponse>>builder()
+                .code(200)
+                .message("Pending products fetched successfully")
+                .result(productService.findAllByStatus(Status.PENDING))
+                .build();
+    }
+
+    /**
+     * Admin duyệt sản phẩm: chuyển từ PENDING sang AVAILABLE hoặc DISCONTINUED
+     * @param productId ID sản phẩm
+     * @param status Trạng thái mới (AVAILABLE hoặc DISCONTINUED)
+     * @param reason Lý do (bắt buộc nếu status = DISCONTINUED)
+     */
+    @PostMapping("/approve/{productId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ApiResponse<ProductResponse> approveProduct(
+            @PathVariable("productId") String productId,
+            @RequestParam("status") Status status,
+            @RequestParam(value = "reason", required = false) String reason
+    ) {
+        log.info("Admin approving product {} with status: {}", productId, status);
+
+        if (status != Status.AVAILABLE && status != Status.DISCONTINUED) {
+            return ApiResponse.<ProductResponse>builder()
+                    .code(400)
+                    .message("Status must be AVAILABLE or DISCONTINUED")
+                    .build();
+        }
+
+        if (status == Status.DISCONTINUED && (reason == null || reason.isBlank())) {
+            return ApiResponse.<ProductResponse>builder()
+                    .code(400)
+                    .message("Reason is required when status is DISCONTINUED")
+                    .build();
+        }
+
+        return ApiResponse.<ProductResponse>builder()
+                .code(200)
+                .message("Product approved successfully")
+                .result(productService.approveProduct(productId, status, reason))
+                .build();
+    }
+
+    /**
+     * Admin tạm ngưng sản phẩm: chuyển sang SUSPENDED
+     * @param productId ID sản phẩm
+     * @param reason Lý do tạm ngưng
+     */
+    @PostMapping("/suspend/{productId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ApiResponse<ProductResponse> suspendProduct(
+            @PathVariable("productId") String productId,
+            @RequestParam("reason") String reason
+    ) {
+        log.info("Suspending product {} with reason: {}", productId, reason);
+        return ApiResponse.<ProductResponse>builder()
+                .code(200)
+                .message("Product suspended successfully")
+                .result(productService.suspendProduct(productId, reason))
+                .build();
+    }
+
+    /**
+     * Seller đăng ký lại sản phẩm bị DISCONTINUED hoặc SUSPENDED
+     * Sản phẩm sẽ chuyển về trạng thái PENDING để chờ admin duyệt lại
+     * @param productId ID sản phẩm
+     */
+//    @PostMapping("/reregister/{productId}")
+//    @PreAuthorize("hasAuthority('UPDATE_PRODUCT')")
+//    public ApiResponse<ProductResponse> reregisterProduct(
+//            @PathVariable("productId") String productId
+//    ) {
+//        log.info("Seller reregistering product: {}", productId);
+//        return ApiResponse.<ProductResponse>builder()
+//                .code(200)
+//                .message("Product reregistered successfully and pending for approval")
+//                .result(productService.reregisterProduct(productId))
+//                .build();
+//    }
+
+    /**
+     * Tạm ngưng tất cả sản phẩm của seller (AVAILABLE -> SUSPENDED)
+     * @param sellerId ID người bán
+     * @param reason Lý do tạm ngưng
+     */
+    @PostMapping("/suspendAllBySeller")
+    @PreAuthorize("hasAuthority('UPDATE_PRODUCT')")
+    public ApiResponse<Void> suspendAllProductsBySeller(
+            @RequestParam("sellerId") String sellerId,
+            @RequestParam("reason") String reason
+    ) {
+        log.info("Suspending all products of seller {} with reason: {}", sellerId, reason);
+        productService.suspendAllProductsBySeller(sellerId, reason);
+        return ApiResponse.<Void>builder()
+                .code(200)
+                .message("All products suspended successfully")
+                .build();
+    }
+
+    /**
+     * Kích hoạt lại tất cả sản phẩm của seller (SUSPENDED -> AVAILABLE)
+     * @param sellerId ID người bán
+     */
+    @PostMapping("/activateAllBySeller")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ApiResponse<Void> activateAllProductsBySeller(
+            @RequestParam("sellerId") String sellerId
+    ) {
+        log.info("Activating all suspended products of seller {}", sellerId);
+        productService.activateAllProductsBySeller(sellerId);
+        return ApiResponse.<Void>builder()
+                .code(200)
+                .message("All suspended products activated successfully")
+                .build();
+    }
+
+    /**
+     * Lấy danh sách sản phẩm theo seller và trạng thái
+     * @param sellerId ID người bán
+     * @param status Trạng thái sản phẩm
+     */
+    @GetMapping("/searchBySellerAndStatus")
+    public ApiResponse<List<ProductResponse>> searchBySellerAndStatus(
+            @RequestParam("sellerId") String sellerId,
+            @RequestParam("status") Status status
+    ) {
+        log.info("Searching for products by seller {} with status: {}", sellerId, status);
+        return ApiResponse.<List<ProductResponse>>builder()
+                .code(200)
+                .message("Products found for seller with status: " + status)
+                .result(productService.findBySellerIdAndStatus(sellerId, status))
+                .build();
+    }
+
 }

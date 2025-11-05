@@ -733,7 +733,7 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public List<ProductResponse> findAllBySellerId(String sellerId) {
-        return productElasticRepository.findBySellerId(sellerId).stream()
+        return productRepository.findBySellerId(sellerId).stream()
                 .map(productMapper::toProductResponse)
                 .collect(Collectors.toList());
     }
@@ -848,5 +848,267 @@ public class ProductServiceImpl implements ProductService {
                 .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
         productElastic.setViewCount(product.getViewCount());
         productElasticRepository.save(productElastic);
+    }
+
+
+    @Override
+    public List<ProductResponse> findAllByStatus(Status status) {
+        log.info("Finding all products with status: {}", status);
+        List<Product> products = productRepository.findByStatus(status.name());
+        return products.stream()
+                .map(productMapper::toProductResponse)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<ProductResponse> findBySellerIdAndStatus(String sellerId, Status status) {
+        log.info("Finding products for seller {} with status: {}", sellerId, status);
+        List<Product> products = productRepository.findBySellerIdAndStatus(sellerId, status.name());
+        return products.stream()
+                .map(productMapper::toProductResponse)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional
+    public ProductResponse approveProduct(String productId, Status status, String reason) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+
+        // Chỉ cho phép duyệt sản phẩm đang ở trạng thái PENDING
+        if (product.getStatus() != Status.PENDING) {
+            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION); // Có thể tạo ErrorCode.INVALID_STATUS
+        }
+
+        // Validate status phải là AVAILABLE hoặc DISCONTINUED
+        if (status != Status.AVAILABLE && status != Status.DISCONTINUED) {
+            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
+        }
+
+        // Cập nhật trạng thái
+        product.setStatus(status);
+
+        if (status == Status.DISCONTINUED) {
+            // Nếu từ chối, lưu lý do và thời gian xóa
+            if (reason == null || reason.isBlank()) {
+                throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
+            }
+            product.setReasonDelete(reason);
+            product.setDeleteAt(Instant.now());
+
+            // Xóa khỏi Elasticsearch
+            productElasticRepository.deleteById(productId);
+
+            // Xóa khỏi Gemini index
+            try {
+                log.info("Removing rejected product {} from Gemini index", productId);
+                geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
+                        .product_id(productId)
+                        .build());
+                geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
+                        .product_id(productId)
+                        .build());
+            } catch (FeignException e) {
+                log.error("Gemini removing index error for product {}: {}", productId, e.getMessage());
+            }
+
+            // Gửi thông báo cho seller
+            ApiResponse<SellerResponse> seller = userClient.searchBySellerId(product.getSellerId());
+            kafkaTemplate.send("product-invalid-notify", ProductInvalidNotify.builder()
+                    .productId(product.getId())
+                    .productName(product.getName())
+                    .reason(reason)
+                    .email(seller.getResult().getEmail())
+                    .build());
+        } else {
+            // Nếu chấp nhận, thêm vào Elasticsearch
+            productElasticRepository.save(productMapper.toProductElastic(product));
+
+            // Index vào Gemini
+            try {
+                log.info("Indexing approved product {} in Gemini", productId);
+                geminiClient.indexSingleProduct(IndexSingleProductRequest.builder()
+                        .product_id(productId)
+                        .force_reindex(true)
+                        .build());
+                geminiClient.indexSingleProductImages(IndexSingleProductImagesRequest.builder()
+                        .product_id(productId)
+                        .force_reindex(true)
+                        .build());
+            } catch (FeignException e) {
+                log.error("Gemini indexing error for product {}: {}", productId, e.getMessage());
+            }
+        }
+
+        Product saved = productRepository.save(product);
+        log.info("Product {} approved with status: {}", productId, status);
+
+        return productMapper.toProductResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public ProductResponse suspendProduct(String productId, String reason) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+
+        // Chỉ cho phép suspend sản phẩm đang AVAILABLE
+        if (product.getStatus() != Status.AVAILABLE) {
+            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
+        }
+
+        // Cập nhật trạng thái
+        product.setStatus(Status.SUSPENDED);
+        product.setReasonDelete(reason);
+        product.setDeleteAt(Instant.now());
+
+        // Xóa khỏi Elasticsearch (tạm thời không cho tìm kiếm)
+        productElasticRepository.deleteById(productId);
+
+        // Xóa khỏi Gemini index
+        try {
+            log.info("Removing suspended product {} from Gemini index", productId);
+            geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
+                    .product_id(productId)
+                    .build());
+            geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
+                    .product_id(productId)
+                    .build());
+        } catch (FeignException e) {
+            log.error("Gemini removing index error for product {}: {}", productId, e.getMessage());
+        }
+
+        Product saved = productRepository.save(product);
+        log.info("Product {} suspended with reason: {}", productId, reason);
+
+        return productMapper.toProductResponse(saved);
+    }
+
+//    @Override
+//    @Transactional
+//    public ProductResponse reregisterProduct(String productId) {
+//        Product product = productRepository.findById(productId)
+//                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
+//
+//        // Chỉ cho phép đăng ký lại sản phẩm DISCONTINUED hoặc SUSPENDED
+//        if (product.getStatus() != Status.DISCONTINUED && product.getStatus() != Status.SUSPENDED) {
+//            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
+//        }
+//
+//        // Chuyển về trạng thái PENDING để chờ admin duyệt
+//        product.setStatus(Status.PENDING);
+//        product.setReasonDelete(null);
+//        product.setDeleteAt(null);
+//
+//        Product saved = productRepository.save(product);
+//        log.info("Product {} reregistered and set to PENDING status", productId);
+//
+//        return productMapper.toProductResponse(saved);
+//    }
+
+    @Override
+    @Transactional
+    public void suspendAllProductsBySeller(String sellerId, String reason) {
+        if (sellerId == null || sellerId.isEmpty()) {
+            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
+        }
+
+        Instant now = Instant.now();
+
+        // 1. Update MongoDB: chỉ suspend những sản phẩm đang AVAILABLE
+        Query q = new Query(
+                new Criteria().andOperator(
+                        Criteria.where("sellerId").is(sellerId),
+                        Criteria.where("status").is(Status.AVAILABLE.name())
+                )
+        );
+        Update u = new Update()
+                .set("status", Status.SUSPENDED)
+                .set("deleteAt", now)
+                .set("reasonDelete", reason);
+
+        var result = mongoTemplate.updateMulti(q, u, Product.class);
+        log.info("Suspended products of seller {}, matched={}, modified={}",
+                sellerId, result.getMatchedCount(), result.getModifiedCount());
+
+        // 2. Lấy danh sách ID sản phẩm vừa bị suspend
+        List<Product> suspendedProducts = productRepository.findBySellerIdAndStatus(sellerId, Status.SUSPENDED.name());
+        List<String> ids = suspendedProducts.stream()
+                .map(Product::getId)
+                .filter(Objects::nonNull)
+                .toList();
+
+        if (!ids.isEmpty()) {
+            productElasticRepository.deleteAllById(ids);
+            log.info("Deleted {} product indices from Elasticsearch", ids.size());
+
+            // 3. Xóa khỏi Gemini index
+            for (String id : ids) {
+                try {
+                    log.info("Removing suspended product {} from Gemini index", id);
+                    geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
+                            .product_id(id)
+                            .build());
+                    geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
+                            .product_id(id)
+                            .build());
+                } catch (FeignException e) {
+                    log.error("Gemini removing index error for product {}: {}", id, e.getMessage());
+                }
+            }
+        }
+    }
+
+    @Override
+    @Transactional
+    public void activateAllProductsBySeller(String sellerId) {
+        if (sellerId == null || sellerId.isEmpty()) {
+            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
+        }
+
+        // 1. Update MongoDB: chỉ activate những sản phẩm đang SUSPENDED
+        Query q = new Query(
+                new Criteria().andOperator(
+                        Criteria.where("sellerId").is(sellerId),
+                        Criteria.where("status").is(Status.SUSPENDED.name())
+                )
+        );
+        Update u = new Update()
+                .set("status", Status.AVAILABLE)
+                .set("deleteAt", null)
+                .set("reasonDelete", null);
+
+        var result = mongoTemplate.updateMulti(q, u, Product.class);
+        log.info("Activated products of seller {}, matched={}, modified={}",
+                sellerId, result.getMatchedCount(), result.getModifiedCount());
+
+        // 2. Thêm lại vào Elasticsearch
+        List<Product> products = productRepository.findBySellerIdAndStatus(sellerId, Status.AVAILABLE.name());
+
+        if (!products.isEmpty()) {
+            List<ProductElastic> elasticProducts = products.stream()
+                    .map(productMapper::toProductElastic)
+                    .collect(Collectors.toList());
+
+            productElasticRepository.saveAll(elasticProducts);
+            log.info("Indexed {} products to Elasticsearch", elasticProducts.size());
+
+            // 3. Index lại vào Gemini
+            for (Product product : products) {
+                try {
+                    log.info("Indexing activated product {} in Gemini", product.getId());
+                    geminiClient.indexSingleProduct(IndexSingleProductRequest.builder()
+                            .product_id(product.getId())
+                            .force_reindex(true)
+                            .build());
+                    geminiClient.indexSingleProductImages(IndexSingleProductImagesRequest.builder()
+                            .product_id(product.getId())
+                            .force_reindex(true)
+                            .build());
+                } catch (FeignException e) {
+                    log.error("Gemini indexing error for product {}: {}", product.getId(), e.getMessage());
+                }
+            }
+        }
     }
 }

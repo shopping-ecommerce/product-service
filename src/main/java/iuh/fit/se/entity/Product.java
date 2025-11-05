@@ -44,7 +44,7 @@
         Integer viewCount;  // Lượt xem sản phẩm
         Integer soldCount;  // Số lượng đã bán (để thống kê)
 
-
+        boolean reUpdate;
         Status status;
 
         @Indexed
