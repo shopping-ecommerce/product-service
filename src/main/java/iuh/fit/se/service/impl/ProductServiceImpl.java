@@ -435,9 +435,10 @@ public class ProductServiceImpl implements ProductService {
     @Override
     public void deleteProduct(ProductInvalid productInvalid) {
         Product product = productRepository.findById(productInvalid.getProductId()).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
-        product.setStatus(Status.DISCONTINUED);
-        product.setReasonDelete(productInvalid.getReason());
-        product.setDeleteAt(Instant.now());
+        product.setStatus(Status.SUSPENDED);
+        product.setReUpdate(true);
+//        product.setReasonDelete(productInvalid.getReason());
+//        product.setDeleteAt(Instant.now());
         productRepository.save(product);
         productElasticRepository.deleteById(productInvalid.getProductId());
         try {
@@ -1049,13 +1050,13 @@ public class ProductServiceImpl implements ProductService {
         Query q = new Query(
                 new Criteria().andOperator(
                         Criteria.where("sellerId").is(sellerId),
-                        Criteria.where("status").is(Status.SUSPENDED.name())
+                        Criteria.where("status").is(Status.SUSPENDED.name()),
+                        Criteria.where("reUpdate").is(false)
                 )
         );
         Update u = new Update()
                 .set("status", Status.AVAILABLE)
                 .set("deleteAt", null)
-                .set("reUpdate",false)
                 .set("reasonDelete", null);
 
         var result = mongoTemplate.updateMulti(q, u, Product.class);

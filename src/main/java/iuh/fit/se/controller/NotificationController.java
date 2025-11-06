@@ -57,6 +57,7 @@ public class NotificationController {
         log.info("Nhận được sự kiện product-invalid cho productId: {}", productInvalid.getProductId());
         try {
             productService.deleteProduct(productInvalid);
+//            productService.suspendProduct(productInvalid.getProductId(), "Sản phẩm vi phạm chính sách");
             log.info("Đã đánh dấu sản phẩm là không hoạt động: {}", productInvalid.getProductId());
         } catch (Exception e) {
             log.error("Lỗi khi đánh dấu sản phẩm không hoạt động {}: {}", productInvalid.getProductId(), e.getMessage());
