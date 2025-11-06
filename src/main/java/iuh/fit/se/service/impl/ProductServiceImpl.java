@@ -981,7 +981,13 @@ public class ProductServiceImpl implements ProductService {
 
         Product saved = productRepository.save(product);
         log.info("Product {} suspended with reason: {}", productId, reason);
-
+        ApiResponse<SellerResponse> seller = userClient.searchBySellerId(product.getSellerId());
+        kafkaTemplate.send("product-invalid-notify", ProductInvalidNotify.builder()
+                .productId(product.getId())
+                .productName(product.getName())
+                .reason(reason)
+                .email(seller.getResult().getEmail())
+                .build());
         return productMapper.toProductResponse(saved);
     }
 
