@@ -292,7 +292,7 @@ public class ProductController {
      * @param sellerId ID người bán
      */
     @PostMapping("/activateAllBySeller")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAuthority('UPDATE_PRODUCT')")
     public ApiResponse<Void> activateAllProductsBySeller(
             @RequestParam("sellerId") String sellerId
     ) {

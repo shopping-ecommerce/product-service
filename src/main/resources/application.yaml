@@ -63,7 +63,7 @@ spring:
 product:
   cleanup:
     enabled: true
-    days-before-deletion: 30
+    days-before-deletion: 365
     cron: "0 0 2 * * SUN"  # 2h sáng hàng ngày (6-field cho Spring)
     batch-size: 100
     delete-images: true
