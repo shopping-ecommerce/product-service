@@ -83,7 +83,12 @@ public enum ErrorCode {
     FILE_NOT_VALID(1010, "File is not a valid image format", HttpStatus.BAD_REQUEST),
     IMAGE_CONTENT_NOT_ALLOWED(1011, "Image contains inappropriate content", HttpStatus.BAD_REQUEST),
     FILE_NOT_EMPTY(1050, "File must not be empty", HttpStatus.BAD_REQUEST),
-    INVALID_IMAGE_INDEX(1051, "Invalid image index", HttpStatus.BAD_REQUEST);
+    INVALID_IMAGE_INDEX(1051, "Invalid image index", HttpStatus.BAD_REQUEST),
+    RESERVATION_ALREADY_EXISTS(409, "Stock reservation already exists for this payment", HttpStatus.CONFLICT),
+    RESERVATION_NOT_FOUND(404, "Stock reservation not found", HttpStatus.NOT_FOUND),
+    VARIANT_NOT_FOUND(404, "Product variant not found", HttpStatus.NOT_FOUND),
+    INSUFFICIENT_STOCK(400, "Insufficient stock for this product", HttpStatus.BAD_REQUEST),
+    CONCURRENT_UPDATE_CONFLICT(409, "Concurrent update conflict, please retry",HttpStatus.CONFLICT);;
 
     int code;
     String message;

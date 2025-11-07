@@ -6,7 +6,8 @@ server:
 spring:
   application:
     name: product-service
-
+  jackson:
+    time-zone: Asia/Ho_Chi_Minh
   # 👉 Ưu tiên lấy từ ENV SPRING_DATA_MONGODB_URI; nếu không có thì dùng service-name "mongodb"
   data:
     mongodb:
@@ -67,7 +68,16 @@ product:
     cron: "0 0 2 * * SUN"  # 2h sáng hàng ngày (6-field cho Spring)
     batch-size: 100
     delete-images: true
+stock:
+  reservation:
+    # Thời gian hết hạn mặc định (phút)
+    default-expiration-minutes: 15
 
+    # Cấu hình batch job cleanup
+    cleanup:
+      enabled: true
+      # Chạy mỗi 5 phút
+      cron: "0 */5 * * * *"
 # Custom elasticsearch configuration
 elasticsearch:
   host: ${ELASTICSEARCH_HOST:elasticsearch}
