@@ -877,9 +877,9 @@ public class ProductServiceImpl implements ProductService {
                 .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
 
         // Chỉ cho phép duyệt sản phẩm đang ở trạng thái PENDING
-        if (product.getStatus() != Status.PENDING) {
-            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION); // Có thể tạo ErrorCode.INVALID_STATUS
-        }
+//        if (product.getStatus() != Status.PENDING) {
+//            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION); // Có thể tạo ErrorCode.INVALID_STATUS
+//        }
 
         // Validate status phải là AVAILABLE hoặc DISCONTINUED
         if (status != Status.AVAILABLE && status != Status.DISCONTINUED) {
