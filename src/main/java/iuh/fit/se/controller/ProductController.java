@@ -71,7 +71,15 @@ public class ProductController {
                 .result(productService.findAllProducts())
                 .build();
     }
-
+    @GetMapping("/getBestSellingProducts")
+    public ApiResponse<List<ProductResponse>> getBestSellingProducts() {
+        log.info("Fetching best-selling products");
+        return ApiResponse.<List<ProductResponse>>builder()
+                .code(200)
+                .message("Best-selling products fetched successfully")
+                .result(productService.findBestSellingProducts())
+                .build();
+    }
     @PreAuthorize("hasAuthority('CREATE_PRODUCT')")
     @PostMapping(value = "/create",consumes = {MediaType.MULTIPART_FORM_DATA_VALUE,MediaType.APPLICATION_JSON_VALUE})
     public ApiResponse<ProductResponse> createProduct(

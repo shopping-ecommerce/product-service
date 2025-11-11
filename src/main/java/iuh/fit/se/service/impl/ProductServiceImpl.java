@@ -733,6 +733,12 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
+    public List<ProductResponse> findBestSellingProducts() {
+        return productElasticRepository.findAllByOrderBySoldCountDesc()
+                .stream().map(productMapper::toProductResponse).toList();
+    }
+
+    @Override
     public List<ProductResponse> findAllBySellerId(String sellerId) {
         return productRepository.findBySellerId(sellerId).stream()
                 .map(productMapper::toProductResponse)
