@@ -22,6 +22,9 @@ public interface ProductService {
     void deleteProduct(ProductInvalid productInvalid);
     List<ProductResponse> findAllByCategory(String category);
     List<ProductResponse> findAllProducts();
+
+    List<ProductResponse> findBestSellingProducts();
+
     List<ProductResponse> findAllBySellerId(String sellerId);
 
     void deleteProductBySeller(ProductInvalid productInvalid);

@@ -18,7 +18,7 @@ public interface ProductElasticRepository extends ElasticsearchRepository<Produc
     // Đã đổi "name" thành "originalName" cho chính xác
     @Query("{\"multi_match\": {\"query\": \"?0\", \"fields\": [\"originalName\", \"description\"], \"fuzziness\": \"AUTO\"}}")
     List<ProductElastic> searchByNameOrDescription(String query);
-
+    List<ProductElastic> findAllByOrderBySoldCountDesc();
     // Gợi ý tìm kiếm (autocomplete) dựa trên name
     // Sửa lại câu query cho đúng với Completion Suggester
 //    @Query("{\"suggest\": {\"product-suggest\": {\"prefix\": \"?0\", \"completion\": {\"field\": \"name\"}}}}")
