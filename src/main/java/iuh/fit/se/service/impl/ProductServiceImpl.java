@@ -26,6 +26,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.mongodb.core.FindAndReplaceOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -367,8 +368,13 @@ public class ProductServiceImpl implements ProductService {
 
         // 7) Update ES & Mongo
         productElasticRepository.save(productMapper.toProductElastic(product));
-        Product saved = productRepository.save(product);
+        Query query = new Query(Criteria.where("_id").is(product.getId()));
 
+        FindAndReplaceOptions options = FindAndReplaceOptions.options()
+                .returnNew()   // Return the document after replacement
+                .upsert();     // Only update, do not create a new document
+
+        Product saved = mongoTemplate.findAndReplace(query, product, options, "products");
         try {
             // Upsert bản ghi sản phẩm
             geminiClient.upsertSingleProduct(UpsertSingleProductRequest.builder()
