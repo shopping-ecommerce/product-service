@@ -732,7 +732,7 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public List<ProductResponse> findAllProducts() {
-        Iterable<ProductElastic> products = productElasticRepository.findAll();
+        Iterable<ProductElastic> products = productElasticRepository.findAllByOrderByCreatedAtDesc();
         return StreamSupport.stream(products.spliterator(), false)
                 .map(productMapper::toProductResponse)
                 .collect(Collectors.toList());
