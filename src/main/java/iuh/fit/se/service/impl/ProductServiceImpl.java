@@ -852,15 +852,30 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     @Transactional
-    public void updateView(String productId){
-        Product product = productRepository.findById(productId).orElseThrow(()-> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
-        product.setViewCount(product.getViewCount() + 1);
-        productRepository.save(product);
+    public void updateView(String productId) {
+        // 1) Tăng viewCount trong Mongo atomically
+        Query query = new Query(Criteria.where("id").is(productId));
+        Update update = new Update().inc("viewCount", 1);
 
-        ProductElastic productElastic = productElasticRepository.findById(productId)
-                .orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
-        productElastic.setViewCount(product.getViewCount());
-        productElasticRepository.save(productElastic);
+        Product updated = mongoTemplate.findAndModify(
+                query,
+                update,
+                org.springframework.data.mongodb.core.FindAndModifyOptions.options()
+                        .returnNew(true),             // trả về document sau khi update
+                Product.class
+        );
+
+        if (updated == null) {
+            throw new AppException(ErrorCode.PRODUCT_NOT_FOUND);
+        }
+
+        // 2) Đồng bộ viewCount sang Elasticsearch (nếu có)
+        productElasticRepository.findById(productId).ifPresent(pe -> {
+            pe.setViewCount(updated.getViewCount());
+            productElasticRepository.save(pe);
+        });
+
+        log.info("Increase view for product {} to {}", productId, updated.getViewCount());
     }
 
 

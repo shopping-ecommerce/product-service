@@ -172,7 +172,7 @@ public class ProductController {
     }
 
     @GetMapping("/view/{id}")
-    public ApiResponse<Object> deleteProductBySeller(
+    public ApiResponse<Object> increaseView(
             @PathVariable("id") String id
     ) {
         log.info("Increase view product with request:  {}", id);
