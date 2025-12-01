@@ -13,7 +13,8 @@ public interface ProductElasticRepository extends ElasticsearchRepository<Produc
 
     // Tìm kiếm sản phẩm theo người bán
     List<ProductElastic> findBySellerId(String sellerId);
-
+    List<ProductElastic> findAllByOrderByCreatedAtAsc();
+    List<ProductElastic> findAllByOrderByCreatedAtDesc();
     // Tìm kiếm full-text trên originalName và description
     // Đã đổi "name" thành "originalName" cho chính xác
     @Query("{\"multi_match\": {\"query\": \"?0\", \"fields\": [\"originalName\", \"description\"], \"fuzziness\": \"AUTO\"}}")
