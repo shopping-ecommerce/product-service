@@ -3,6 +3,7 @@ package iuh.fit.se.repository.httpclient;
 
 import feign.codec.Encoder;
 import feign.form.spring.SpringFormEncoder;
+import iuh.fit.se.configuration.FeignConfig;
 import iuh.fit.se.dto.request.*;
 import iuh.fit.se.dto.response.*;
 import org.springframework.beans.factory.ObjectFactory;
@@ -18,7 +19,8 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.multipart.MultipartFile;
 
 @FeignClient(
-        name = "gemini-service",configuration = {FileClient.FormConfig.class}
+        name = "gemini-service",
+        configuration = {FileClient.FormConfig.class, FeignConfig.class}  // Thêm FeignConfig
 )
 public interface GeminiClient {
     // POST /index/index-single-product
@@ -32,9 +34,10 @@ public interface GeminiClient {
     // POST /index/upsert-single-product
     @PostMapping(value = "/index/upsert-single-product", consumes = MediaType.APPLICATION_JSON_VALUE)
     IndexOperationResponse upsertSingleProduct(@RequestBody UpsertSingleProductRequest request);
+
     // Index tất cả ảnh của 1 product
     @PostMapping(value = "/index/index-single-product-images", consumes = MediaType.APPLICATION_JSON_VALUE)
-    IndexImagesOperationResponse indexSingleProductImages(@RequestBody IndexSingleProductImagesRequest   request);
+    IndexImagesOperationResponse indexSingleProductImages(@RequestBody IndexSingleProductImagesRequest request);
 
     // Remove toàn bộ image-embeddings của 1 product
     @PostMapping(value = "/index/remove-product-images", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -55,5 +58,4 @@ public interface GeminiClient {
     // Remove 1 ảnh — dùng datapoint_id hoặc (product_id + position)
     @PostMapping(value = "/index/remove-single-image", consumes = MediaType.APPLICATION_JSON_VALUE)
     BasicOperationResponse removeSingleImage(@RequestBody RemoveSingleImageRequest request);
-
 }

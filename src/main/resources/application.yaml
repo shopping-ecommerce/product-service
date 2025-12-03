@@ -49,8 +49,9 @@ spring:
             read-timeout: 60000
           gemini-service:
             url: ${FEIGN_GEMINI:http://gemini-service:5001/gemini}
-            connect-timeout: 30000
-            read-timeout: 60000
+            connect-timeout: 60000
+            read-timeout: 120000
+            logger-level: full
           review-service:
             url: ${FEIGN_REVIEW:http://review-service:8088/feedback}
             connect-timeout: 30000
@@ -68,6 +69,20 @@ product:
     cron: "0 0 2 * * SUN"  # 2h sáng hàng ngày (6-field cho Spring)
     batch-size: 100
     delete-images: true
+  gemini:
+    batch-size: 5
+    batch-delay-ms: 8000
+    thread-pool-size: 5
+feign:
+  client:
+    config:
+      default:
+        loggerLevel: BASIC
+        errorDecoder: iuh.fit.se.config.FeignConfig
+        retryer: iuh.fit.se.config.FeignConfig
+      gemini-service:
+        loggerLevel: FULL
+
 stock:
   reservation:
     # Thời gian hết hạn mặc định (phút)
@@ -87,4 +102,7 @@ service:
     file-service: ${FILE_SERVICE_TOKEN:}
 logging:
   level:
+    iuh.fit.se.repository.httpclient.GeminiClient: DEBUG
+    feign.Retryer: DEBUG
     iuh.fit.se.batch: INFO
+    iuh.fit.se.configuration.FeignConfig: DEBUG
