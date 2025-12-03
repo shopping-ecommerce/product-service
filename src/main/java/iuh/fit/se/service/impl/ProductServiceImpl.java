@@ -22,10 +22,13 @@ import iuh.fit.se.repository.httpclient.FileClient;
 import iuh.fit.se.repository.httpclient.GeminiClient;
 import iuh.fit.se.repository.httpclient.UserClient;
 import iuh.fit.se.service.ProductService;
+import jakarta.annotation.PreDestroy;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.mongodb.core.FindAndReplaceOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -38,6 +41,10 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -55,6 +62,9 @@ public class ProductServiceImpl implements ProductService {
     KafkaTemplate<String, Object> kafkaTemplate;
     UserClient userClient;
     GeminiClient geminiClient;
+    @NonFinal
+    ExecutorService executorService;
+
     @Override
     public ProductResponse findById(String id) {
         Product product = productRepository.findById(id).orElseThrow(() -> new AppException(ErrorCode.PRODUCT_NOT_FOUND));
@@ -1052,23 +1062,148 @@ public class ProductServiceImpl implements ProductService {
                 .toList();
 
         if (!ids.isEmpty()) {
+            // Xóa Elasticsearch ngay (không có quota limit)
             productElasticRepository.deleteAllById(ids);
             log.info("Deleted {} product indices from Elasticsearch", ids.size());
 
-            // 3. Xóa khỏi Gemini index
-            for (String id : ids) {
-                try {
-                    log.info("Removing suspended product {} from Gemini index", id);
-                    geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
-                            .product_id(id)
-                            .build());
-                    geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
-                            .product_id(id)
-                            .build());
-                } catch (FeignException e) {
-                    log.error("Gemini removing index error for product {}: {}", id, e.getMessage());
+            // 3. Xóa khỏi Gemini index với rate limiting + retry
+            removeFromGeminiWithRateLimit(ids);
+        }
+    }
+
+    private ExecutorService getOrCreateExecutor() {
+        if (executorService == null || executorService.isShutdown()) {
+            synchronized (this) {
+                if (executorService == null || executorService.isShutdown()) {
+                    executorService = Executors.newFixedThreadPool(5);
+                    log.info("Initialized executor service with 5 threads");
                 }
             }
+        }
+        return executorService;
+    }
+    /**
+     * Xóa products từ Gemini index với rate limiting
+     * - Xử lý theo batch 5 products
+     * - Delay 8 giây giữa các batch (tuân thủ 8 requests/minute của Python)
+     * - Xử lý parallel trong mỗi batch
+     * - Tự động retry khi gặp lỗi 429 (nhờ FeignConfig)
+     */
+    private void removeFromGeminiWithRateLimit(List<String> productIds) {
+        final int BATCH_SIZE = 5; // Xử lý 5 products/batch
+        final long DELAY_MS = 8000; // 8 giây delay (60s / 8 requests = 7.5s, làm tròn 8s)
+
+        int totalBatches = (productIds.size() + BATCH_SIZE - 1) / BATCH_SIZE;
+        int successCount = 0;
+        int failCount = 0;
+        ExecutorService executor = getOrCreateExecutor();
+        log.info("Starting Gemini index removal for {} products in {} batches",
+                productIds.size(), totalBatches);
+
+        for (int i = 0; i < productIds.size(); i += BATCH_SIZE) {
+            int batchNumber = (i / BATCH_SIZE) + 1;
+            int end = Math.min(i + BATCH_SIZE, productIds.size());
+            List<String> batch = productIds.subList(i, end);
+
+            log.info("Processing Gemini removal batch {}/{}: {} products",
+                    batchNumber, totalBatches, batch.size());
+
+            // Xử lý batch với parallel stream
+            List<CompletableFuture<Boolean>> futures = batch.stream()
+                    .map(id -> CompletableFuture.supplyAsync(() ->
+                            removeProductFromGemini(id), executor))
+                    .collect(Collectors.toList());
+
+            // Đợi tất cả requests trong batch hoàn thành
+            List<Boolean> results = futures.stream()
+                    .map(CompletableFuture::join)
+                    .collect(Collectors.toList());
+
+            // Đếm success/fail
+            long batchSuccess = results.stream().filter(r -> r).count();
+            long batchFail = results.size() - batchSuccess;
+            successCount += batchSuccess;
+            failCount += batchFail;
+
+            log.info("Batch {}/{} completed: {} success, {} failed",
+                    batchNumber, totalBatches, batchSuccess, batchFail);
+
+            // Delay giữa các batch (trừ batch cuối)
+            if (end < productIds.size()) {
+                try {
+                    log.info("Waiting {}ms before next batch to respect rate limit...", DELAY_MS);
+                    Thread.sleep(DELAY_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.error("Thread interrupted during delay", e);
+                    break;
+                }
+            }
+        }
+
+        log.info("Gemini index removal completed: {} total, {} success, {} failed",
+                productIds.size(), successCount, failCount);
+    }
+
+    /**
+     * Xóa 1 product từ Gemini index (text + images)
+     * Return true nếu thành công, false nếu thất bại
+     * FeignConfig sẽ tự động retry khi gặp lỗi 429
+     */
+    private boolean removeProductFromGemini(String productId) {
+        try {
+            // Xóa text embedding
+            log.debug("Removing text embedding for product {}", productId);
+            geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
+                    .product_id(productId)
+                    .build());
+
+            // Xóa image embeddings
+            log.debug("Removing image embeddings for product {}", productId);
+            geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
+                    .product_id(productId)
+                    .build());
+
+            log.info("Successfully removed product {} from Gemini index", productId);
+            return true;
+
+        } catch (FeignException.TooManyRequests e) {
+            // Lỗi 429 sau khi retry hết (FeignConfig đã retry 3 lần)
+            log.error("Rate limit exceeded for product {} after retries: {}",
+                    productId, e.getMessage());
+            return false;
+
+        } catch (FeignException.ServiceUnavailable e) {
+            // Lỗi 503 sau khi retry hết
+            log.error("Gemini service unavailable for product {} after retries: {}",
+                    productId, e.getMessage());
+            return false;
+
+        } catch (FeignException e) {
+            // Các lỗi Feign khác
+            log.error("Feign error removing product {} from Gemini: {} - {}",
+                    productId, e.status(), e.getMessage());
+            return false;
+
+        } catch (Exception e) {
+            // Lỗi không xác định
+            log.error("Unexpected error removing product {} from Gemini: {}",
+                    productId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    // Cleanup executor service khi shutdown
+    @PreDestroy
+    public void cleanup() {
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -1079,7 +1214,7 @@ public class ProductServiceImpl implements ProductService {
             throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION);
         }
 
-        // 1. Update MongoDB: chỉ activate những sản phẩm đang SUSPENDED
+        // 1. Update MongoDB
         Query q = new Query(
                 new Criteria().andOperator(
                         Criteria.where("sellerId").is(sellerId),
@@ -1107,25 +1242,111 @@ public class ProductServiceImpl implements ProductService {
             productElasticRepository.saveAll(elasticProducts);
             log.info("Indexed {} products to Elasticsearch", elasticProducts.size());
 
-            // 3. Index lại vào Gemini
-            for (Product product : products) {
+            // 3. Index lại vào Gemini với rate limiting
+            List<String> productIds = products.stream()
+                    .map(Product::getId)
+                    .filter(Objects::nonNull)
+                    .toList();
+
+            indexToGeminiWithRateLimit(productIds);
+        }
+    }
+    private void indexToGeminiWithRateLimit(List<String> productIds) {
+        // Lazy init executor service
+        if (executorService == null) {
+            executorService = Executors.newFixedThreadPool(5);
+            log.info("Initialized Gemini executor service with {} threads", 5);
+        }
+
+        int totalBatches = (productIds.size() + 5 - 1) / 5;
+        int successCount = 0;
+        int failCount = 0;
+
+        log.info("Starting Gemini indexing for {} products in {} batches (batch_size={}, delay={}ms)",
+                productIds.size(), totalBatches, 5, 8000);
+
+        for (int i = 0; i < productIds.size(); i += 5) {
+            int batchNumber = (i / 5) + 1;
+            int end = Math.min(i + 5, productIds.size());
+            List<String> batch = productIds.subList(i, end);
+
+            log.info("Processing Gemini indexing batch {}/{}: {} products",
+                    batchNumber, totalBatches, batch.size());
+
+            // Xử lý batch parallel
+            List<CompletableFuture<Boolean>> futures = batch.stream()
+                    .map(id -> CompletableFuture.supplyAsync(() ->
+                            indexProductToGemini(id), executorService))
+                    .collect(Collectors.toList());
+
+            // Đợi batch hoàn thành
+            List<Boolean> results = futures.stream()
+                    .map(CompletableFuture::join)
+                    .collect(Collectors.toList());
+
+            // Đếm success/fail
+            long batchSuccess = results.stream().filter(r -> r).count();
+            long batchFail = results.size() - batchSuccess;
+            successCount += batchSuccess;
+            failCount += batchFail;
+
+            log.info("Batch {}/{} completed: {} success, {} failed",
+                    batchNumber, totalBatches, batchSuccess, batchFail);
+
+            // Delay giữa các batch
+            if (end < productIds.size()) {
                 try {
-                    log.info("Indexing activated product {} in Gemini", product.getId());
-                    geminiClient.indexSingleProduct(IndexSingleProductRequest.builder()
-                            .product_id(product.getId())
-                            .force_reindex(true)
-                            .build());
-                    geminiClient.indexSingleProductImages(IndexSingleProductImagesRequest.builder()
-                            .product_id(product.getId())
-                            .force_reindex(true)
-                            .build());
-                } catch (FeignException e) {
-                    log.error("Gemini indexing error for product {}: {}", product.getId(), e.getMessage());
+                    log.info("Waiting {}ms before next batch to respect rate limit...", 8000);
+                    Thread.sleep(8000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.error("Thread interrupted during delay", e);
+                    break;
                 }
             }
         }
-    }
 
+        log.info("Gemini indexing completed: {} total, {} success, {} failed",
+                productIds.size(), successCount, failCount);
+    }
+    private boolean indexProductToGemini(String productId) {
+        try {
+            log.debug("Indexing text embedding for product {}", productId);
+            geminiClient.indexSingleProduct(IndexSingleProductRequest.builder()
+                    .product_id(productId)
+                    .force_reindex(true)
+                    .build());
+
+            log.debug("Indexing image embeddings for product {}", productId);
+            geminiClient.indexSingleProductImages(IndexSingleProductImagesRequest.builder()
+                    .product_id(productId)
+                    .force_reindex(true)
+                    .build());
+
+            log.info("Successfully indexed product {} to Gemini", productId);
+            return true;
+
+        } catch (FeignException.TooManyRequests e) {
+            log.error("Rate limit exceeded for product {} after retries: {}",
+                    productId, e.getMessage());
+            return false;
+
+        } catch (FeignException.ServiceUnavailable e) {
+            log.error("Gemini service unavailable for product {} after retries: {}",
+                    productId, e.getMessage());
+            return false;
+
+        } catch (FeignException e) {
+            log.error("Feign error indexing product {} to Gemini: {} - {}",
+                    productId, e.status(), e.getMessage());
+            return false;
+
+        } catch (Exception e) {
+            log.error("Unexpected error indexing product {} to Gemini: {}",
+                    productId, e.getMessage(), e);
+            return false;
+        }
+    }
     @Override
     @Transactional
     public ProductResponse reregisterProduct(ProductUpdateRequest request, List<MultipartFile> images) {
