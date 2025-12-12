@@ -62,8 +62,7 @@ public class ProductServiceImpl implements ProductService {
     KafkaTemplate<String, Object> kafkaTemplate;
     UserClient userClient;
     GeminiClient geminiClient;
-    @NonFinal
-    ExecutorService executorService;
+    private final ExecutorService geminiExecutor;
 
     @Override
     public ProductResponse findById(String id) {
@@ -170,20 +169,11 @@ public class ProductServiceImpl implements ProductService {
                     productMapper.toProductElastic(product)
             );
             log.info("Product indexed in Elasticsearch with ID: {}", productElastic.getId());
-            try {
-                log.info("Indexing product {} in Gemini", product.getId());
-                geminiClient.indexSingleProduct(IndexSingleProductRequest.builder()
-                        .product_id(product.getId())
-                        .force_reindex(true)
-                        .build());
-                log.info("Indexing product {} images in Gemini", product.getId());
-                geminiClient.indexSingleProductImages(IndexSingleProductImagesRequest.builder()
-                        .product_id(product.getId())
-                        .force_reindex(true)
-                        .build());
-            } catch (FeignException e){
-                log.error("Gemini indexing error for product {}: {}", product.getId(), e.getMessage());
-            };
+            kafkaTemplate.send("product-index-request", ProductIndexEvent.builder()
+                    .productId(product.getId())
+                    .forceReindex(true)
+                    .build());
+            log.info("Sent index request for product {}", product.getId());
             return productMapper.toProductResponse(product);
 
         } catch (AppException e) {
@@ -385,25 +375,11 @@ public class ProductServiceImpl implements ProductService {
                 .upsert();     // Only update, do not create a new document
 
         Product saved = mongoTemplate.findAndReplace(query, product, options, "products");
-        try {
-            // Upsert bản ghi sản phẩm
-            geminiClient.upsertSingleProduct(UpsertSingleProductRequest.builder()
-                    .product_id(product.getId())
-                    .build());
-
-            // Upsert toàn bộ ảnh theo position hiện có
-            for (Image img : product.getImages()) {
-                geminiClient.upsertSingleImageJson(UpsertSingleImageJsonRequest.builder()
-                        .product_id(product.getId())
-                        .position(img.position())
-                        .image_url(img.url())
-                        .build());
-            }
-            log.info("Gemini upserted product {} and {} images", product.getId(),
-                    product.getImages() == null ? 0 : product.getImages().size());
-        } catch (FeignException e) {
-            log.error("Gemini upsert error for product {}: {}", product.getId(), e.getMessage());
-        }
+        kafkaTemplate.send("product-index-request", ProductIndexEvent.builder()
+                .productId(saved.getId())
+                .forceReindex(true)
+                .build());
+        log.info("Sent index update request for product {}", saved.getId());
 
         log.info("Updated product {}. images={}, optionDefs={}, mediaByOption={}, variants={}",
                 saved.getId(),
@@ -457,18 +433,10 @@ public class ProductServiceImpl implements ProductService {
 //        product.setDeleteAt(Instant.now());
         productRepository.save(product);
         productElasticRepository.deleteById(productInvalid.getProductId());
-        try {
-            log.info("Removing product {} from Gemini index", product.getId());
-            geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
-                    .product_id(product.getId())
-                    .build());
-            log.info("Removing image product {} from Gemini index",product.getId());
-            geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
-                    .product_id(product.getId())
-                    .build());
-        } catch (FeignException e){
-            log.error("Gemini removing index error for product {}: {}",product.getId(), e.getMessage());
-        };
+        kafkaTemplate.send("product-remove-gemini-request", ProductRemoveGeminiEvent.builder()
+                .productId(product.getId())
+                .build());
+        log.info("Sent remove Gemini request for product {}", product.getId());
         ApiResponse<SellerResponse> seller = userClient.searchBySellerId(product.getSellerId());
         kafkaTemplate.send("product-invalid-notify", ProductInvalidNotify.builder()
                 .productId(product.getId())
@@ -486,18 +454,10 @@ public class ProductServiceImpl implements ProductService {
         product.setDeleteAt(Instant.now());
         productRepository.save(product);
         productElasticRepository.deleteById(productInvalid.getProductId());
-        try {
-            log.info("Removing product {} from Gemini index", product.getId());
-            geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
-                    .product_id(product.getId())
-                    .build());
-            log.info("Removing image product {} from Gemini index",product.getId());
-            geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
-                    .product_id(product.getId())
-                    .build());
-        } catch (FeignException e){
-            log.error("Gemini removing index error for product {}: {}",product.getId(), e.getMessage());
-        };
+        kafkaTemplate.send("product-remove-gemini-request", ProductRemoveGeminiEvent.builder()
+                .productId(product.getId())
+                .build());
+        log.info("Sent remove Gemini request for product {}", product.getId());
     }
 
     @Override
@@ -938,17 +898,10 @@ public class ProductServiceImpl implements ProductService {
             productElasticRepository.deleteById(productId);
 
             // Xóa khỏi Gemini index
-            try {
-                log.info("Removing rejected product {} from Gemini index", productId);
-                geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
-                        .product_id(productId)
-                        .build());
-                geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
-                        .product_id(productId)
-                        .build());
-            } catch (FeignException e) {
-                log.error("Gemini removing index error for product {}: {}", productId, e.getMessage());
-            }
+            kafkaTemplate.send("product-remove-gemini-request", ProductRemoveGeminiEvent.builder()
+                    .productId(product.getId())
+                    .build());
+            log.info("Sent remove Gemini request for rejected product {}", productId);
 
             // Gửi thông báo cho seller
             ApiResponse<SellerResponse> seller = userClient.searchBySellerId(product.getSellerId());
@@ -963,19 +916,12 @@ public class ProductServiceImpl implements ProductService {
             productElasticRepository.save(productMapper.toProductElastic(product));
 
             // Index vào Gemini
-            try {
-                log.info("Indexing approved product {} in Gemini", productId);
-                geminiClient.indexSingleProduct(IndexSingleProductRequest.builder()
-                        .product_id(productId)
-                        .force_reindex(true)
-                        .build());
-                geminiClient.indexSingleProductImages(IndexSingleProductImagesRequest.builder()
-                        .product_id(productId)
-                        .force_reindex(true)
-                        .build());
-            } catch (FeignException e) {
-                log.error("Gemini indexing error for product {}: {}", productId, e.getMessage());
-            }
+            // Thay sync call bằng Kafka
+            kafkaTemplate.send("product-index-request", ProductIndexEvent.builder()
+                    .productId(product.getId())
+                    .forceReindex(true)
+                    .build());
+            log.info("Sent index request after approve for product {}", product.getId());
         }
         product.setReUpdate(false);
         Product saved = productRepository.save(product);
@@ -1004,17 +950,10 @@ public class ProductServiceImpl implements ProductService {
         productElasticRepository.deleteById(productId);
 
         // Xóa khỏi Gemini index
-        try {
-            log.info("Removing suspended product {} from Gemini index", productId);
-            geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
-                    .product_id(productId)
-                    .build());
-            geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
-                    .product_id(productId)
-                    .build());
-        } catch (FeignException e) {
-            log.error("Gemini removing index error for product {}: {}", productId, e.getMessage());
-        }
+        kafkaTemplate.send("product-remove-gemini-request", ProductRemoveGeminiEvent.builder()
+                .productId(product.getId())
+                .build());
+        log.info("Sent remove Gemini request for product {}", product.getId());
 
         Product saved = productRepository.save(product);
         log.info("Product {} suspended with reason: {}", productId, reason);
@@ -1072,15 +1011,7 @@ public class ProductServiceImpl implements ProductService {
     }
 
     private ExecutorService getOrCreateExecutor() {
-        if (executorService == null || executorService.isShutdown()) {
-            synchronized (this) {
-                if (executorService == null || executorService.isShutdown()) {
-                    executorService = Executors.newFixedThreadPool(5);
-                    log.info("Initialized executor service with 5 threads");
-                }
-            }
-        }
-        return executorService;
+        return geminiExecutor;
     }
     /**
      * Xóa products từ Gemini index với rate limiting
@@ -1090,45 +1021,38 @@ public class ProductServiceImpl implements ProductService {
      * - Tự động retry khi gặp lỗi 429 (nhờ FeignConfig)
      */
     private void removeFromGeminiWithRateLimit(List<String> productIds) {
-        final int BATCH_SIZE = 5; // Xử lý 5 products/batch
-        final long DELAY_MS = 8000; // 8 giây delay (60s / 8 requests = 7.5s, làm tròn 8s)
+        final int BATCH_SIZE = 5;
+        final long DELAY_MS = 8000;
 
         int totalBatches = (productIds.size() + BATCH_SIZE - 1) / BATCH_SIZE;
         int successCount = 0;
         int failCount = 0;
-        ExecutorService executor = getOrCreateExecutor();
-        log.info("Starting Gemini index removal for {} products in {} batches",
-                productIds.size(), totalBatches);
+
+        // Dùng geminiExecutor thay vì executorService cũ
+        log.info("Starting Gemini index removal for {} products in {} batches", productIds.size(), totalBatches);
 
         for (int i = 0; i < productIds.size(); i += BATCH_SIZE) {
             int batchNumber = (i / BATCH_SIZE) + 1;
             int end = Math.min(i + BATCH_SIZE, productIds.size());
             List<String> batch = productIds.subList(i, end);
 
-            log.info("Processing Gemini removal batch {}/{}: {} products",
-                    batchNumber, totalBatches, batch.size());
+            log.info("Processing Gemini removal batch {}/{}: {} products", batchNumber, totalBatches, batch.size());
 
-            // Xử lý batch với parallel stream
             List<CompletableFuture<Boolean>> futures = batch.stream()
-                    .map(id -> CompletableFuture.supplyAsync(() ->
-                            removeProductFromGemini(id), executor))
+                    .map(id -> CompletableFuture.supplyAsync(() -> removeProductFromGemini(id), geminiExecutor))
                     .collect(Collectors.toList());
 
-            // Đợi tất cả requests trong batch hoàn thành
             List<Boolean> results = futures.stream()
                     .map(CompletableFuture::join)
                     .collect(Collectors.toList());
 
-            // Đếm success/fail
             long batchSuccess = results.stream().filter(r -> r).count();
             long batchFail = results.size() - batchSuccess;
             successCount += batchSuccess;
             failCount += batchFail;
 
-            log.info("Batch {}/{} completed: {} success, {} failed",
-                    batchNumber, totalBatches, batchSuccess, batchFail);
+            log.info("Batch {}/{} completed: {} success, {} failed", batchNumber, totalBatches, batchSuccess, batchFail);
 
-            // Delay giữa các batch (trừ batch cuối)
             if (end < productIds.size()) {
                 try {
                     log.info("Waiting {}ms before next batch to respect rate limit...", DELAY_MS);
@@ -1192,21 +1116,6 @@ public class ProductServiceImpl implements ProductService {
             return false;
         }
     }
-
-    // Cleanup executor service khi shutdown
-    @PreDestroy
-    public void cleanup() {
-        executorService.shutdown();
-        try {
-            if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-    }
-
     @Override
     @Transactional
     public void activateAllProductsBySeller(String sellerId) {
@@ -1252,51 +1161,38 @@ public class ProductServiceImpl implements ProductService {
         }
     }
     private void indexToGeminiWithRateLimit(List<String> productIds) {
-        // Lazy init executor service
-        if (executorService == null) {
-            executorService = Executors.newFixedThreadPool(5);
-            log.info("Initialized Gemini executor service with {} threads", 5);
-        }
-
         int totalBatches = (productIds.size() + 5 - 1) / 5;
         int successCount = 0;
         int failCount = 0;
 
-        log.info("Starting Gemini indexing for {} products in {} batches (batch_size={}, delay={}ms)",
-                productIds.size(), totalBatches, 5, 8000);
+        log.info("Starting Gemini indexing for {} products in {} batches (batch_size=5, delay=8000ms)",
+                productIds.size(), totalBatches);
 
         for (int i = 0; i < productIds.size(); i += 5) {
             int batchNumber = (i / 5) + 1;
             int end = Math.min(i + 5, productIds.size());
             List<String> batch = productIds.subList(i, end);
 
-            log.info("Processing Gemini indexing batch {}/{}: {} products",
-                    batchNumber, totalBatches, batch.size());
+            log.info("Processing Gemini indexing batch {}/{}: {} products", batchNumber, totalBatches, batch.size());
 
-            // Xử lý batch parallel
             List<CompletableFuture<Boolean>> futures = batch.stream()
-                    .map(id -> CompletableFuture.supplyAsync(() ->
-                            indexProductToGemini(id), executorService))
+                    .map(id -> CompletableFuture.supplyAsync(() -> indexProductToGemini(id), geminiExecutor))
                     .collect(Collectors.toList());
 
-            // Đợi batch hoàn thành
             List<Boolean> results = futures.stream()
                     .map(CompletableFuture::join)
                     .collect(Collectors.toList());
 
-            // Đếm success/fail
             long batchSuccess = results.stream().filter(r -> r).count();
             long batchFail = results.size() - batchSuccess;
             successCount += batchSuccess;
             failCount += batchFail;
 
-            log.info("Batch {}/{} completed: {} success, {} failed",
-                    batchNumber, totalBatches, batchSuccess, batchFail);
+            log.info("Batch {}/{} completed: {} success, {} failed", batchNumber, totalBatches, batchSuccess, batchFail);
 
-            // Delay giữa các batch
             if (end < productIds.size()) {
                 try {
-                    log.info("Waiting {}ms before next batch to respect rate limit...", 8000);
+                    log.info("Waiting 8000ms before next batch to respect rate limit...");
                     Thread.sleep(8000);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -1485,14 +1381,10 @@ public class ProductServiceImpl implements ProductService {
         } catch (Exception ignore) { }
 
         // 9) Đảm bảo không còn trong Gemini index
-        try {
-            geminiClient.removeSingleProduct(RemoveSingleProductRequest.builder()
-                    .product_id(product.getId()).build());
-            geminiClient.removeProductImages(RemoveProductImagesRequest.builder()
-                    .product_id(product.getId()).build());
-        } catch (FeignException e) {
-            log.warn("Gemini remove on reregister (safe to ignore): {}", e.getMessage());
-        }
+        kafkaTemplate.send("product-remove-gemini-request", ProductRemoveGeminiEvent.builder()
+                .productId(product.getId())
+                .build());
+        log.info("Sent remove Gemini request before reregister for product {}", product.getId());
 
         // 10) Lưu Mongo
         Product saved = productRepository.save(product);
